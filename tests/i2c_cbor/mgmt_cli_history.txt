@@ -1,0 +1,20 @@
+n
+cbor:[[0x50, 32]]
+n
+cbor:[[0x50, 32]]
+n
+cbor:[[0x50, 32]]
+y
+cbor:[[0x50, 32]]
+y
+cbor:[[0x50, 1]]
+y
+cbor:[[0x50, 1]]
+y
+cbor:[[0x50, 1]]
+y
+cbor:[[0x50, 1]]
+y
+cbor:[[0x50, 1]]
+y
+cbor:[[0x50, 1]]

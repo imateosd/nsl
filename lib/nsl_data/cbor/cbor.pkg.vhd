@@ -41,7 +41,7 @@ package cbor is
     kind: kind_t;
     arg_left: integer range 0 to 8;
     arg: byte_string(0 to 7);
-    undefinite : boolean;
+    indefinite : boolean;
   end record;
 
   -- Resets a parser for next item parsing
@@ -76,10 +76,10 @@ package cbor is
   function cbor_bstr(value: byte_string) return byte_string;
   -- Serializes a definite text string (including data)
   function cbor_tstr(value: string) return byte_string;
-  -- Serializes an array header (if length is passed), or undefinite
+  -- Serializes an array header (if length is passed), or indefinite
   -- (if negative or default). Contents are not handled here.
   function cbor_array_hdr(length: integer := -1) return byte_string;
-  -- Serializes a map header (if length is passed), or undefinite
+  -- Serializes a map header (if length is passed), or indefinite
   -- (if negative or default). Contents are not handled here.
   function cbor_map_hdr(length: integer := -1) return byte_string;
   -- Serializes a tag item. Contained item may be concatinated after.
@@ -118,16 +118,16 @@ package cbor is
   -- encoded.
   function cbor_tagged(tag: natural; item: byte_string) return byte_string;
 
-  -- Serializes an undefinite byte string. Must be passed a
+  -- Serializes an indefinite byte string. Must be passed a
   -- concatination of encoded definite byte strings
   function cbor_bstr_undef(elements: byte_string) return byte_string;
-  -- Serializes an undefinite text string. Must be passed a
+  -- Serializes an indefinite text string. Must be passed a
   -- concatination of encoded definite text strings
   function cbor_tstr_undef(elements: byte_string) return byte_string;
-  -- Serializes an undefinite array. Must be passed a
+  -- Serializes an indefinite array. Must be passed a
   -- concatination of encoded items
   function cbor_array_undef(elements: byte_string) return byte_string;
-  -- Serializes an undefinite map. Must be passed a
+  -- Serializes an indefinite map. Must be passed a
   -- concatination of encoded pairs of items
   function cbor_map_undef(elements: byte_string) return byte_string;
 
@@ -146,7 +146,7 @@ package body cbor is
     ret.arg := (others => dontcare_byte_c);
     ret.arg_left := 0;
     ret.kind := KIND_INVALID;
-    ret.undefinite := false;
+    ret.indefinite := false;
     return ret;
   end function;
 
@@ -166,7 +166,7 @@ package body cbor is
       ret.arg_left := parser.arg_left - 1;
     else
       ret.header_valid := true;
-      ret.undefinite := false;
+      ret.indefinite := false;
       ret.arg_left := 0;
       ret.arg := (others => x"00");
       ret.kind := KIND_INVALID;
@@ -220,14 +220,22 @@ package body cbor is
       elsif argument = 27 then
         ret.arg_left := 8;
       elsif argument = 31 then
-        ret.undefinite := true;
+        ret.indefinite := true;
       else
         ret.arg := (0 to 6 => x"00",
                     7 => "000" & data(4 downto 0));
       end if;
     end if;
 
-    return ret;
+  -- report "Value of major:         " & integer'image(major) severity note;
+  -- report "Value of kind:          " & kind_t'image(ret.kind) severity note;
+  -- report "Value of argument:      " & integer'image(argument) severity note;
+  -- report "Value of arg_left:      " & integer'image(ret.arg_left) severity note;
+  -- report "Value of arg:           " & nsl_data.text.to_string(ret.arg) severity note;
+  -- report "Value of header_valid:  " & nsl_data.text.to_string(ret.header_valid) severity note;
+  -- report "Value of done:          " & nsl_data.text.to_string(ret.header_valid and ret.arg_left = 0) severity note;
+
+   return ret;
   end function;
 
   function is_last(parser: parser_t;
@@ -440,7 +448,7 @@ package body cbor is
         write(output, to_string(-1-arg_int(p)));
 
       when KIND_BSTR =>
-        if p.undefinite then
+        if p.indefinite then
           write(output, string'("(_ "));
           while input.all'length /= 0 and input.all(input.all'left) /= x"ff"
           loop
@@ -458,7 +466,7 @@ package body cbor is
         end if;
 
       when KIND_TSTR =>
-        if p.undefinite then
+        if p.indefinite then
           write(output, string'("(_ "));
           while input.all(input.all'left) /= x"ff"
           loop
@@ -476,7 +484,7 @@ package body cbor is
         end if;
 
       when KIND_ARRAY =>
-        if p.undefinite then
+        if p.indefinite then
           write(output, string'("[_ "));
           while input.all(input.all'left) /= x"ff"
           loop
@@ -499,13 +507,13 @@ package body cbor is
         end if;
 
       when KIND_MAP =>
-        if p.undefinite then
+        if p.indefinite then
           write(output, string'("{_ "));
-          undefinite: while input.all(input.all'left) /= x"ff"
+          indefinite: while input.all(input.all'left) /= x"ff"
           loop
             cbor_diag_convert(output, input);
             if input.all(input.all'left) = x"ff" then
-              exit undefinite;
+              exit indefinite;
             end if;
             write(output, string'(": "));
             cbor_diag_convert(output, input);
