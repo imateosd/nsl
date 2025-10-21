@@ -42,7 +42,9 @@ architecture beh of controller is
                                   -- if command item is of array kind, go to ST_ADDR_GET
                                   -- if command item is a simple value (null) go to ST_STOP
         ST_CMD_END,               -- will get here after the command has been executed. 
-                                  -- if the number of commands is completed, go to ARRAY_GET_FIRST, otherwise go to CMD_GET_FIRST
+                                  -- if the number of commands is completed, go to
+                                  -- ARRAY_GET_FIRST (via RSP_BREAK_PUT), otherwise go to CMD_GET_FIRST
+                                  -- if the number of commands is completer, send break for indefine array 
 
         ST_ADDR_GET,              -- get address (type and complete ai)
         ST_ADDR_SET,              -- store address, reset parser and go to next
@@ -58,39 +60,54 @@ architecture beh of controller is
         ST_WRITE_RUN,             -- set I2C_BUS_RUN
         ST_WRITE_DATA,            -- write byte (r.data) to shift register (decrement word_count)
         ST_WRITE_ACK,             -- wait for ack
-        ST_WRITE_END,             -- (may be merged in ST_WRITE_ACK) if word_count = 0, go to ST_CMD_END, if not, go to ST_WRITE_GET
-
+        ST_WRITE_END,             -- if word_count = 0, go to ST_CMD_END, if not, go to ST_WRITE_GET
+     
         ST_READ_RUN,              -- set I2C_BUS_RUN
         ST_READ_DATA,             -- read DATA
         ST_READ_ACK,              -- send ACK
         ST_READ_PUT,              -- put read byte in rsp bus
-        ST_READ_END,              -- (may be merged in ST_READ_PUT) if word_count = 0, go to ST_CMD_END, if not, go to ST_READ_RUN/ST_READ_DATA
+        ST_READ_END,              -- (may be merged in ST_READ_PUT) if word_count = 0, go to ST_CMD_END,
+                                  -- if not, go to ST_READ_RUN/ST_READ_DATA
 
         ST_START,                 -- send command to start the bus
         ST_START_WAIT,            -- wait for bus to start
         ST_STOP,                  -- send command to stop the bus
-        ST_STOP_WAIT,             -- wait (?) for bus to stop
+        ST_STOP_WAIT,             -- wait for bus to stop
 
-        ST_RSP_PUT_OK,            -- put null (1 byte)
-        ST_RSP_PUT_ANACK,         -- put false (1 byte)
-        ST_RSP_PUT_DNACK,         -- put #6.2(uint) (more than 1 byte)
+        ST_RSP_OK_PREP,
+        ST_RSP_OK_PUT,            -- put null (1 byte)
+        ST_RSP_ANACK_PREP,
+        ST_RSP_ANACK_PUT,         -- put false (1 byte)
+        ST_RSP_DNACK_PREP,
+        ST_RSP_DNACK_PUT,         -- put #6.2(uint) (more than 1 byte)
+        ST_RSP_ARRAY_HDR_PREP,
+        ST_RSP_ARRAY_HDR_PUT, 
+        ST_RSP_BSTR_HDR_PREP,
+        ST_RSP_BSTR_HDR_PUT,      -- send header for byte string with len = r.word_count
+        ST_RSP_BREAK_PREP,
+        ST_RSP_BREAK_PUT,
 
         ST_IO_FLUSH_GET,
         ST_IO_FLUSH_PUT
         
     );
-  
+    
     type regs_t is record
         state         : state_t;
         owned         : std_ulogic;
-        received      : std_ulogic_vector(7 downto 0); -- I think it's not needed
         addr          : std_ulogic_vector(9 downto 0);
         data          : std_ulogic_vector(7 downto 0);
         word_count    : natural range 0 to 63;
+        word_total    : natural range 0 to 63;
         command_count : unsigned(31 downto 0); -- this could be up to 63 downto 0
         divisor       : unsigned(5 downto 0);
         parser        : nsl_data.cbor.parser_t;
         indefinite    : boolean;
+        last          : boolean; 
+        encoded       : nsl_data.bytestream.byte_string(8 downto 0);
+        encoded_len   : natural range 0 to 8;
+        encoded_i     : natural range 0 to 8;
+        cmd_cancelled : boolean;
     end record;
 
     signal r, rin : regs_t;
@@ -106,14 +123,6 @@ architecture beh of controller is
     signal shift_w_data_o, shift_r_data_i : std_ulogic_vector(7 downto 0);
 
 begin
-
-    -- Typical use case in a streaming environment is to consume the
-    -- bytestream one byte at a time by calling ``feed()`` on a ``parser_t``
-    -- record.  ``is_last`` will tell whether item header is complete at this
-    -- cycle.  On subsequent cycle, ``kind()``, ``arg()`` and ``arg_int()``
-    -- will give out the details of the item.  For items containing data
-    -- (BSTR, TSTR), it is caller's responsability to consume data length
-    -- before returning to parsing an item.
 
     line_mon: nsl_i2c.i2c.i2c_line_monitor
     generic map(
@@ -182,7 +191,7 @@ begin
                           cmd_i, r, rsp_i,
                           shift_r_data_i, shift_r_valid_i, shift_w_ready_i,
                           shift_arb_ok_i)
-    -- transition : process (cmd_i, r, rsp_i)
+      variable cbr_encoded : nsl_data.bytestream.byte_stream;
     begin
       rin <= r;
 
@@ -203,11 +212,15 @@ begin
           rin.command_count <= (others => '0');
           rin.addr <= (others => '0');
           rin.data <= (others => '0');
+          rin.last <= false;
+          rin.encoded <= (others => (others => '-') );
+          rin.encoded_len <= 0;
+          rin.encoded_i <= 0;
+          rin.cmd_cancelled <= false;
 
         when ST_ARRAY_GET =>
-          if not nsl_data.cbor.is_done(r.parser) then
             if cmd_i.valid = '1' then
-              report "In ST_ARRAY_GET, parsing a byte" severity note;
+              -- report "In ST_ARRAY_GET, parsing a byte" severity note;
               rin.parser <= nsl_data.cbor.feed(r.parser, cmd_i.data(0));
               if nsl_data.cbor.is_last( r.parser, cmd_i.data(0) ) then
                 report "In ST_ARRAY_GET, going to ST_ARRAY_ENTER" severity note;
@@ -215,17 +228,9 @@ begin
                 rin.state <= ST_ARRAY_ENTER;
               end if;
             end if;
-          end if;
 
         when ST_ARRAY_ENTER =>
           if nsl_data.cbor.kind(r.parser) = KIND_ARRAY then
-            -- if not nsl_data.cbor.is_done(r.parser) then
-            --   if cmd_i.valid = '1' then
-            --     report "In ST_ARRAY_ENTER, parsing another byte" severity note;
-            --     rin.parser <= nsl_data.cbor.feed(r.parser, cmd_i.data(0));
-            --     report "cmd_i.data(0)" & nsl_data.text.to_string(cmd_i.data(0));
-            --   end if;
-            -- else
             if not r.parser.indefinite then
               report "In ST_ARRAY_ENTER, command count set to " & nsl_data.text.to_string(nsl_data.cbor.arg(r.parser, 32));
               rin.command_count <= nsl_data.cbor.arg(r.parser, 32);
@@ -234,27 +239,25 @@ begin
               rin.indefinite    <= true;
             end if;
             rin.parser <= nsl_data.cbor.reset;
-            report "In ST_ARRAY_ENTER, going to ST_CMD_GET" severity note;
-            report "========================================" severity note;
-            rin.state  <= ST_CMD_GET;
-           --  end if;
+            report "In ST_ARRAY_ENTER, going to ST_CMD_GET (via ST_RSP_ARRAY_HDR_PREP)" severity note;
+            report "==================================================================" severity note;
+            rin.state  <= ST_RSP_ARRAY_HDR_PREP;
           else 
             -- rin.state <= ST_FLUSH;
           end if;
 
         when ST_CMD_GET =>
-          if not nsl_data.cbor.is_done(r.parser) then
             if cmd_i.valid = '1' then
-              report "In ST_CMD_GET, parsing a byte" severity note;
+              -- report "In ST_CMD_GET, parsing a byte" severity note;
               rin.parser <= nsl_data.cbor.feed(r.parser, cmd_i.data(0));
-              report "cmd_i.data(0) is " & nsl_data.text.to_hex_string(cmd_i.data(0));
+              -- report "cmd_i.data(0) is " & nsl_data.text.to_hex_string(cmd_i.data(0));
               if nsl_data.cbor.is_last( r.parser, cmd_i.data(0) ) then
                 report "In ST_CMD_GET, going to ST_CMD_EXEC" severity note;
                 report "========================================" severity note;
+                rin.cmd_cancelled <= false;
                 rin.state <= ST_CMD_EXEC;
               end if;
             end if;
-          end if;
 
         when ST_CMD_EXEC =>
           if nsl_data.cbor.kind(r.parser) = KIND_ARRAY then
@@ -265,13 +268,14 @@ begin
             rin.state  <= ST_STOP;
           elsif nsl_data.cbor.kind(r.parser) = KIND_BREAK then
             if r.indefinite then
-              report "In ST_CMD_EXEC, found a break, going to ST_ARRAY_GET" severity note;
-              rin.state  <= ST_ARRAY_GET;
+              report "In ST_CMD_EXEC, found a break, going to ST_ARRAY_GET (via ST_RSP_BREAK_PUT)" severity note;
+              rin.state  <= ST_RSP_BREAK_PREP;
             else 
               report "In ST_CMD_EXEC, found a break in an item of definite lenght" severity warning;
             end if;
           else
-            -- report "in ST_CMD_EXEC, Type of item was not the expected one" severity note;
+            report "in ST_CMD_EXEC, Type of item was not the expected one" severity warning;
+            rin.state <= ST_RSP_BREAK_PREP;
           end if;
           rin.parser <= nsl_data.cbor.reset;
           if not r.indefinite then
@@ -280,18 +284,16 @@ begin
           report "========================================" severity note;
 
         when ST_ADDR_GET =>
-          if not nsl_data.cbor.is_done(r.parser) then
             if cmd_i.valid = '1' then
-              report "In ST_ADDR_GET, parsing a byte" severity note;
+              -- report "In ST_ADDR_GET, parsing a byte" severity note;
               rin.parser <= nsl_data.cbor.feed(r.parser, cmd_i.data(0));
-              report "cmd_i.data(0) is " & nsl_data.text.to_hex_string(cmd_i.data(0));
+              -- report "cmd_i.data(0) is " & nsl_data.text.to_hex_string(cmd_i.data(0));
               if nsl_data.cbor.is_last( r.parser, cmd_i.data(0) ) then
                 report "In ST_ADDR_GET, going to ST_ADDR_SET" severity note;
                 report "========================================" severity note;
                 rin.state <= ST_ADDR_SET;
               end if;
             end if;
-          end if;
           
         when ST_ADDR_SET =>
           if nsl_data.cbor.kind(r.parser) = KIND_POSITIVE then
@@ -306,7 +308,6 @@ begin
           end if;
 
         when ST_OP_GET =>
-          if not nsl_data.cbor.is_done(r.parser) then
             if cmd_i.valid = '1' then
               report "In ST_OP_GET, parsing a byte" severity note;
               rin.parser <= nsl_data.cbor.feed(r.parser, cmd_i.data(0));
@@ -316,7 +317,6 @@ begin
                 rin.state <= ST_ADDR_SET_W_R;
               end if;
             end if;
-          end if;
         
         when ST_ADDR_SET_W_R =>
           rin.state <= ST_START;
@@ -326,12 +326,14 @@ begin
             report "========================================" severity note;
             rin.addr <= r.addr(8 downto 0) & '1';
             rin.word_count <= to_integer(nsl_data.cbor.arg(r.parser, 64));
+            rin.word_total <= to_integer(nsl_data.cbor.arg(r.parser, 64));
           elsif nsl_data.cbor.kind(r.parser) = KIND_BSTR then
             -- WRITE OPERATION
             report "In ST_ADDR_SET_W_R, going to ST_START for a WRITE operation" severity note;
             report "========================================" severity note;
             rin.addr <= r.addr(8 downto 0) & '0';
             rin.word_count <= to_integer(nsl_data.cbor.arg(r.parser, 64));
+            rin.word_total <= to_integer(nsl_data.cbor.arg(r.parser, 64));
           else
             report "In ST_ADDR_SET_W_R, next operation type is not a write or a read!" severity note;
             report "========================================" severity note;
@@ -353,7 +355,7 @@ begin
               rin.state <= ST_ADDR_RUN;
             else 
               report "In ST_START_WAIT, clock not owned, going to ST_IO_FLUSH_GET" severity note;
-              report "========================================" severity note;
+              report "===========================================================" severity note;
               rin.state <= ST_IO_FLUSH_GET;
             end if;
           end if;
@@ -361,7 +363,7 @@ begin
         when ST_ADDR_RUN =>
           if clocker_ready_i = '1' then
             report "In ST_ADDR_RUN, going to ST_ADDR_DATA" severity note;
-            report "========================================" severity note;
+            report "====================================" severity note;
             rin.state <= ST_ADDR_DATA;
             rin.data  <= r.addr(7 downto 0);
           end if;
@@ -380,33 +382,24 @@ begin
               if r.addr(0) = '1' then
                 report "In ST_ADDR_ACK, going to ST_READ_RUN" severity note;
                 report "========================================" severity note;
-                rin.state <= ST_READ_RUN;
+                rin.state <= ST_RSP_BSTR_HDR_PREP;  -- before going to
+                                                    -- ST_READ_RUN, write the
+                                                    -- bstr header to hold the
+                                                    -- read bytes
               else
                 report "In ST_ADDR_ACK, going to ST_WRITE_GET" severity note;
                 report "========================================" severity note;
                 rin.state <= ST_WRITE_GET;
               end if;
             else
-              report "In ST_ADDR_ACK, going to ST_RSP_PUT_ANACK" severity note;
-              report "========================================" severity note;
-              rin.state <= ST_RSP_PUT_ANACK;
+              report "In ST_ADDR_ACK, going to ST_RSP_ANACK_PREP" severity note;
+              report "==========================================" severity note;
+              rin.cmd_cancelled <= true;
+              -- rin.command_count <= (others => '0');
+              rin.state <= ST_RSP_ANACK_PREP;
             end if;
           end if;
-
-        -- when ST_READ_GET =>
-        --   if not nsl_data.cbor.is_done(r.parser) then
-        --     if cmd_i.valid = '1' then
-        --       report "In ST_READ_GET, going to parse another byte" severity note;
-        --       rin.parser <= nsl_data.cbor.feed(r.parser, cmd_i.data(0));
-        --      end if;
-        --   else
-        --     rin.word_count <= nsl_data.cbor.arg_int(r.parser);
-        --     rin.parser <= nsl_data.cbor.reset;
-        --     report "In ST_READ_CNT_GET, going to ST_READ_RUN" severity note;
-        --     report "========================================" severity note;
-        --     rin.state <= ST_READ_RUN;
-        --   end if;
-          
+        
         when ST_READ_RUN =>
           if clocker_ready_i = '1' then
             report "In ST_READ_RUN, going to ST_READ_DATA" severity note;
@@ -425,9 +418,10 @@ begin
         when ST_READ_ACK =>
           if shift_w_ready_i = '1' then
             report "In ST_READ_ACK, going to ST_READ_PUT" severity note;
-            report "========================================" severity note;
+            report "====================================" severity note;
             rin.word_count <= (r.word_count - 1) mod 64;
             rin.state <= ST_READ_PUT;
+            -- rin.last <= (r.word_count - 1) mod 64 = 0;
           end if;
        
         when ST_READ_PUT =>
@@ -447,34 +441,18 @@ begin
           end if;
           report "========================================" severity note;
           
-        -- when ST_WRITE_GET =>
-        --   if not nsl_data.cbor.is_done(r.parser) then
-        --     if cmd_i.valid = '1' then
-        --       report "In ST_WRITE_CNT_GET, going to parse another byte" severity note;
-        --       rin.parser <= nsl_data.cbor.feed(r.parser, cmd_i.data(0));
-        --      end if;
-        --   else
-        --     rin.word_count <= nsl_data.cbor.arg_int(r.parser);
-        --     rin.parser <= nsl_data.cbor.reset;
-        --     report "In ST_WRITE_CNT_GET, going to ST_WRITE_RUN" severity note;
-        --     report "========================================" severity note;
-        --     rin.state <= ST_WRITE_RUN;
-        --   end if;
-
-        -- when ST_WRITE_HDR_GET =>
-        --   if cmd_i.valid = '1' then
-        --     report "In ST_WRITE_HDR_GET, going to ST_ADDR_GET" severity note;
-        --     report "========================================" severity note;
-        --     rin.state  <= ST_ADDR_GET;
-        --     rin.parser <= nsl_data.cbor.feed(r.parser, cmd_i.data(0));
-        --   end if;
-
         when ST_WRITE_GET =>
           if cmd_i.valid = '1' then
-            report "In ST_WRITE_GET, getting a byte and going to ST_WRITE_RUN" severity note;
-            report "========================================" severity note;
             rin.data <= cmd_i.data(0);
-            rin.state <= ST_WRITE_RUN;
+            if not r.cmd_cancelled then
+              rin.state <= ST_WRITE_RUN;
+              report "In ST_WRITE_GET, getting a byte and going to ST_WRITE_RUN" severity note;
+            else
+              rin.word_count <= (r.word_count - 1) mod 64;
+              rin.state <= ST_WRITE_END;
+              report "[Cancelled command] In ST_WRITE_GET, discarding a byte and going to ST_WRITE_END" severity note;
+            end if;
+            report "========================================" severity note;
           end if;
 
           when ST_WRITE_RUN =>
@@ -495,9 +473,10 @@ begin
           if shift_r_valid_i = '1' then
             rin.word_count <= (r.word_count - 1) mod 64;
             if shift_r_data_i(0) = '1' then -- NACK
-              report "In ST_WRITE_ACK, going to ST_RSP_PUT_DNACK" severity note;
+              report "In ST_WRITE_ACK, going to ST_RSP_DNACK_PREP" severity note;
               report "========================================" severity note;
-              rin.state <= ST_RSP_PUT_DNACK;
+              rin.state <= ST_RSP_DNACK_PREP;
+              rin.cmd_cancelled <= true;
               rin.data <= (0 => not shift_r_data_i(0), others => '0');
             else
               report "In ST_WRITE_ACK, going to ST_WRITE_END" severity note;
@@ -508,25 +487,26 @@ begin
           end if;
 
         when ST_WRITE_END =>
-          if rsp_i.ready = '1' then
+          -- if rsp_i.ready = '1' then
             if r.word_count = 0 then
-              report "In ST_WRITE_END, going to ST_CMD_END" severity note;
+              if not r.cmd_cancelled then
+                report "In ST_WRITE_END, going to ST_CMD_END (via ST_RSP_OK_PREP)" severity note;
+                rin.state <= ST_RSP_OK_PREP;
+              else
+                report "[Cancelled command] In ST_WRITE_END, going to ST_CMD_END (NOT via ST_RSP_OK_PREP)" severity note;
+                rin.state <= ST_CMD_END;
+              end if;
               report "========================================" severity note;
-              rin.state <= ST_CMD_END;
             else
               report "In ST_WRITE_END, going to ST_WRITE_GET" severity note;
               report "========================================" severity note;
               rin.state <= ST_WRITE_GET;
             end if;
-          end if;
+          -- end if;
 
-        when ST_CMD_END => -- to me this is clearer to read, should be optimized and synthesized to the same hardware, or not?
-          if not r.indefinite then
-            if r.command_count = 0 then
-              rin.state <= ST_ARRAY_GET;
-            else
-              rin.state <= ST_CMD_GET;
-            end if;
+        when ST_CMD_END =>
+          if not r.indefinite and r.command_count = 0 then
+            rin.state <= ST_RSP_BREAK_PREP;
           else
             rin.state <= ST_CMD_GET;
           end if;
@@ -563,13 +543,117 @@ begin
           report "========================================" severity note;
           rin.state <= ST_CMD_END;
         end if;
-        
-        when ST_RSP_PUT_OK | ST_RSP_PUT_ANACK | ST_RSP_PUT_DNACK  =>
+
+        when ST_RSP_OK_PREP =>
+          report "In ST_RSP_OK_PREP going to ST_RSP_OK_PUT" severity note;
+          report "========================================" severity note;
+          rin.data  <= nsl_data.cbor.cbor_null(0);
+          rin.state <= ST_RSP_OK_PUT;
+          
+        when ST_RSP_OK_PUT =>
           if rsp_i.ready = '1' then
-            report "In ST_RSP_PUT_OK | ST_RSP_PUT_ANACK | ST_RSP_PUT_DNACK | ST_RSP_PUT_DATA going to ST_CMD_GET" severity note;
+            report "In ST_RSP_OK_PUT going to ST_CMD_GET" severity note;
             report "========================================" severity note;
-            rin.state <= ST_CMD_GET;
+            rin.state <= ST_CMD_END;
           end if;
+        
+        when ST_RSP_ANACK_PREP =>
+          report "In ST_RSP_ANACK_PREP going to ST_RSP_ANACK_PUT" severity note;
+          report "========================================" severity note;
+          rin.data  <= nsl_data.cbor.cbor_false(0);
+          rin.state <= ST_RSP_ANACK_PUT;
+        
+        when ST_RSP_ANACK_PUT =>
+          if rsp_i.ready = '1' then
+            if r.addr(0) = '1' then
+              report "In ST_RSP_ANACK_PUT, going to ST_CMD_END" severity note;
+              report "========================================" severity note;
+              rin.state <= ST_CMD_END;
+            else
+              -- In the case of write operations, must read all the bytes to
+              -- read, even if they will not be written.
+              report "In ST_RSP_ANACK_PUT, going to ST_WRITE_GET" severity note;
+              report "========================================" severity note;
+              rin.state <= ST_WRITE_GET;
+            end if;
+          end if;
+        
+        when ST_RSP_DNACK_PREP =>
+          report "In ST_RSP_DNACK_PREP going to ST_RSP_DNACK_PUT" severity note;
+          report "==============================================" severity note;
+          -- nsl_data.bytestream.write(s => cbr_encoded, d => nsl_data.cbor.cbor_positive(value => to_integer(to_unsigned(r.word_count, 6))));
+          -- report "cbr_encoded" & nsl_data.text.to_string(cbr_encoded.all);
+          nsl_data.bytestream.write(s => cbr_encoded, d => nsl_data.cbor.cbor_tagged(tag => 2, item => nsl_data.cbor.cbor_positive(value => to_integer(to_unsigned(r.word_total - r.word_count - 1, 6))) ) );
+          report "cbr_encoded " & nsl_data.text.to_string(cbr_encoded.all);
+
+          rin.encoded_len <= cbr_encoded.all'length;
+          rin.encoded(cbr_encoded.all'length-1 downto 0) <= cbr_encoded.all;
+          nsl_data.bytestream.clear(s => cbr_encoded);
+
+          rin.state <= ST_RSP_DNACK_PUT;
+          rin.last  <= false;
+          
+        when ST_RSP_DNACK_PUT  =>
+          if rsp_i.ready = '1' then
+            if r.encoded_len - 1 = r.encoded_i then
+              report "In ST_RSP_DNACK_PUT going to ST_WRITE_END" severity note;
+              report "=======================================" severity note;
+              rin.state <= ST_WRITE_END;
+              rin.encoded_len <= 0;
+              rin.encoded_i <= 0;
+            else
+              rin.encoded_i <= (r.encoded_i + 1) mod 9;
+            end if;
+          end if;
+
+      when ST_RSP_ARRAY_HDR_PREP =>
+          nsl_data.bytestream.write(s => cbr_encoded, d => nsl_data.cbor.cbor_array_hdr(length => -1) );
+          rin.encoded_len <= cbr_encoded.all'length;
+          rin.encoded(cbr_encoded.all'length-1 downto 0) <= cbr_encoded.all;
+          rin.state <= ST_RSP_ARRAY_HDR_PUT;
+          rin.last  <= false;
+          nsl_data.bytestream.clear(s => cbr_encoded);
+          
+      when ST_RSP_ARRAY_HDR_PUT =>
+          if rsp_i.ready = '1' then
+            if r.encoded_len - 1 = r.encoded_i then
+              rin.state <= ST_CMD_GET;
+              rin.encoded_len <= 0;
+              rin.encoded_i <= 0;
+            else
+              rin.encoded_i <= (r.encoded_i + 1) mod 9;
+            end if;
+          end if;
+
+      when ST_RSP_BSTR_HDR_PREP =>
+          nsl_data.bytestream.write(s => cbr_encoded, d => nsl_data.cbor.cbor_bstr_hdr(length => to_integer(to_unsigned(r.word_count, 6))));
+          rin.encoded_len <= cbr_encoded.all'length;
+          rin.encoded(cbr_encoded.all'length-1 downto 0) <= cbr_encoded.all;
+          nsl_data.bytestream.clear(s => cbr_encoded);
+          rin.state <= ST_RSP_BSTR_HDR_PUT;
+
+      when ST_RSP_BSTR_HDR_PUT =>
+          if rsp_i.ready = '1' then
+            if r.encoded_len - 1 = r.encoded_i then
+              rin.state <= ST_READ_RUN;
+              rin.encoded_len <= 0;
+              rin.encoded_i <= 0;
+            else
+              rin.encoded_i <= (r.encoded_i + 1) mod 9;
+            end if;
+          end if;
+          
+      when ST_RSP_BREAK_PREP=>
+          rin.data  <= nsl_data.cbor.cbor_break(0);
+          rin.last  <= true;
+          rin.state <= ST_RSP_BREAK_PUT;
+    
+      when ST_RSP_BREAK_PUT =>
+          if rsp_i.ready = '1' then
+            rin.state <= ST_ARRAY_GET;
+          end if;
+
+          
       end case;
     end process;
 
@@ -578,8 +662,7 @@ begin
     moore: process (r)
     begin
       cmd_o.ready <= '0';
-      rsp_o.valid <= '0';
-      rsp_o.last  <= '1';
+      rsp_o <= nsl_amba.axi4_stream.transfer_defaults(cfg => axi_s_cfg_c);
 
       shift_enable_o <= '0';
       shift_send_data_o <= '-';
@@ -597,18 +680,17 @@ begin
         when ST_RESET =>
 
         when ST_ARRAY_GET | ST_CMD_GET | ST_ADDR_GET | ST_OP_GET  =>
-          if not nsl_data.cbor.is_done(r.parser) then
-            cmd_o.ready <= '1';
-          end if;
+          cmd_o.ready <= '1';
 
         when ST_WRITE_GET =>
           cmd_o.ready <= '1';
 
        when ST_READ_PUT =>
-          rsp_o.valid <= '1';
-          rsp_o.data(0) <= r.data;
+          rsp_o <= nsl_amba.axi4_stream.transfer( cfg => axi_s_cfg_c, bytes => nsl_data.bytestream.from_suv(r.data) , last => r.last);
           
-        when ST_ARRAY_ENTER | ST_CMD_EXEC | ST_CMD_END | ST_ADDR_SET | ST_ADDR_SET_W_R | ST_WRITE_END | ST_READ_END=>
+          
+        when ST_ARRAY_ENTER | ST_CMD_EXEC | ST_CMD_END | ST_ADDR_SET | ST_ADDR_SET_W_R | ST_WRITE_END | ST_READ_END =>
+        when ST_RSP_OK_PREP| ST_RSP_DNACK_PREP | ST_RSP_ANACK_PREP | ST_RSP_BSTR_HDR_PREP | ST_RSP_ARRAY_HDR_PREP | ST_RSP_BREAK_PREP =>
 
         when ST_ADDR_RUN | ST_WRITE_RUN | ST_READ_RUN =>
           clocker_cmd_o <= I2C_BUS_RUN;
@@ -637,9 +719,13 @@ begin
         when ST_STOP =>
           clocker_cmd_o <= I2C_BUS_STOP;
         
-        when ST_RSP_PUT_OK | ST_RSP_PUT_ANACK | ST_RSP_PUT_DNACK =>
-          rsp_o.valid <= '1';
-          rsp_o.data(0) <= r.data;
+        when ST_RSP_OK_PUT | ST_RSP_ANACK_PUT | ST_RSP_BREAK_PUT =>
+          rsp_o <= nsl_amba.axi4_stream.transfer( cfg => axi_s_cfg_c, bytes => nsl_data.bytestream.from_suv(r.data) , last => r.last);
+
+        when ST_RSP_BSTR_HDR_PUT | ST_RSP_ARRAY_HDR_PUT | ST_RSP_DNACK_PUT =>
+          report "r.encoded_len " & nsl_data.text.to_string(r.encoded_len) & " sending r.encoded(" & nsl_data.text.to_string(r.encoded_len - r.encoded_i - 1) & " downto " & nsl_data.text.to_string(r.encoded_len - r.encoded_i - 1) & ")"  severity note;
+          report "r.encoded " & nsl_data.text.to_string(r.encoded) severity note;
+          rsp_o <= nsl_amba.axi4_stream.transfer( cfg => axi_s_cfg_c, bytes => r.encoded(r.encoded_len - r.encoded_i - 1 downto r.encoded_len - r.encoded_i - 1), last => r.last);
        
         when ST_IO_FLUSH_GET =>
         when ST_IO_FLUSH_PUT =>      
@@ -653,8 +739,8 @@ begin
 
       when ST_READ_RUN | ST_READ_DATA | ST_READ_ACK =>
         shift_enable_o <= '1';
-        shift_send_data_o <= '0';
-
+        shift_send_data_o <= '0';   
+        
       when others =>
         null;
     end case;

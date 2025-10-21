@@ -622,6 +622,31 @@ package axi4_stream is
     dt : in time := 10 ns;
     timeout : in time := 100 us;
     sev: severity_level := failure);
+
+  -- Sends a frame (frm1) on master queue and expects an exactly matching frame
+  -- (frm2) on slave queue
+  procedure frame_queue_check_io(
+    variable root_master: in frame_queue_root_t;
+    variable root_slave: in frame_queue_root_t;
+    variable frm1: in frame_t;
+    variable frm2: in frame_t;
+    dt : in time := 10 ns;
+    timeout : in time := 100 us;
+    sev: severity_level := failure);
+
+  -- Sends a frame (of data1) on master queue and expects an exactly matching frame
+  -- (data2) on slave queue
+  procedure frame_queue_check_io(
+    variable root_master: in frame_queue_root_t;
+    variable root_slave: in frame_queue_root_t;
+    constant data1: byte_string := null_byte_string;
+    constant data2: byte_string := null_byte_string;
+    constant dest: std_ulogic_vector := na_suv;
+    constant id:   std_ulogic_vector := na_suv;
+    constant user: std_ulogic_vector := na_suv;
+    dt : in time := 10 ns;
+    timeout : in time := 100 us;
+    sev: severity_level := failure);
   
   -- Master-side procedure. Takes frames from a queue and puts them to
   -- signals.  Never returns
@@ -1977,6 +2002,39 @@ package body axi4_stream is
     frame_queue_check(root_slave, frm, dt, timeout, sev);
   end procedure;
 
+  procedure frame_queue_check_io(
+    variable root_master: in frame_queue_root_t;
+    variable root_slave: in frame_queue_root_t;
+    variable frm1: in frame_t;
+    variable frm2: in frame_t;
+    dt : in time := 10 ns;
+    timeout : in time := 100 us;
+    sev: severity_level := failure)
+  is
+    variable c1, c2 : frame_t;
+  begin
+    frame_queue_put(root_master, frm1);
+    frame_queue_check(root_slave, frm2, dt, timeout, sev);
+  end procedure;
+
+  procedure frame_queue_check_io(
+    variable root_master: in frame_queue_root_t;
+    variable root_slave: in frame_queue_root_t;
+    constant data1: byte_string := null_byte_string;
+    constant data2: byte_string := null_byte_string;
+    constant dest: std_ulogic_vector := na_suv;
+    constant id:   std_ulogic_vector := na_suv;
+    constant user: std_ulogic_vector := na_suv;
+    dt : in time := 10 ns;
+    timeout : in time := 100 us;
+    sev: severity_level := failure)
+  is
+    variable frm1: frame_t := frame(data1, dest, id, user);
+    variable frm2: frame_t := frame(data2, dest, id, user);
+  begin
+    frame_queue_check_io(root_master, root_slave, frm1, frm2, dt, timeout, sev);
+  end procedure;
+  
   procedure frame_queue_get(
     variable root: frame_queue_root_t;
     variable frm: out frame_t;
@@ -2038,7 +2096,8 @@ package body axi4_stream is
   is
     variable frm: frame_t;
   begin
-    stream_o <= accept(cfg, false);
+    stream_o <= accept(cfg, true);
+    -- stream_o <= accept(cfg, false); -- why???
 
     loop
       wait until falling_edge(clock);

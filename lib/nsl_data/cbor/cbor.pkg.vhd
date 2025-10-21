@@ -84,6 +84,10 @@ package cbor is
   function cbor_map_hdr(length: integer := -1) return byte_string;
   -- Serializes a tag item. Contained item may be concatinated after.
   function cbor_tag_hdr(value: natural) return byte_string;
+  -- Serializes a byte string header. Contained bytes may be concatinated after.
+  function cbor_bstr_hdr(length: natural) return byte_string;
+  -- Serializes a text string header. Contained characters may be concatinated after.
+  function cbor_tstr_hdr(length: natural) return byte_string;
   -- Serializes a simple item.
   function cbor_simple(value: natural) return byte_string;
   -- Serializes true (simple(21))
@@ -359,7 +363,7 @@ package body cbor is
   begin
     return item_encode(3, to_unsigned_auto(bs'length)) & bs;
   end function;
-
+  
   function cbor_array_hdr(length: integer := -1) return byte_string
   is
   begin
@@ -384,6 +388,18 @@ package body cbor is
   is
   begin
     return item_encode(6, to_unsigned_auto(value));
+  end function;
+  
+  function cbor_bstr_hdr(length: natural) return byte_string
+  is
+  begin
+    return item_encode(2, to_unsigned_auto(length));
+  end function;
+
+  function cbor_tstr_hdr(length: natural) return byte_string
+  is
+  begin
+    return item_encode(3, to_unsigned_auto(length));
   end function;
 
   function cbor_false return byte_string
