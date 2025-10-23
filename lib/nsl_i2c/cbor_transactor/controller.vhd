@@ -2,12 +2,12 @@ library ieee;
 use ieee.std_logic_1164.all;
 use ieee.numeric_std.all;
 
-library nsl_amba, nsl_i2c, nsl_data;
+library nsl_amba, nsl_i2c, nsl_data, nsl_simulation;
 use nsl_i2c.cbor_transactor.all;
 use nsl_i2c.master.all;
 use nsl_i2c.i2c."+";
 use nsl_data.cbor.all;
-use nsl_data.bytestream.all;
+-- use nsl_data.bytestream.all;
 
 entity controller is
     generic(
@@ -32,8 +32,7 @@ architecture beh of controller is
 
     type state_t is (
         ST_RESET,
-                                  -- TODO: remove all checks of is_done(). Check, but possibly not needed with is_last()
-                                  -- TODO: use the actual functions from axi4_stream 
+
         ST_ARRAY_GET,             -- get first item (type and ai). should be an array header
         ST_ARRAY_ENTER,           -- store data if needed, reset parser and go to next
         
@@ -91,7 +90,7 @@ architecture beh of controller is
         ST_IO_FLUSH_PUT
         
     );
-    
+
     type regs_t is record
         state         : state_t;
         owned         : std_ulogic;
@@ -121,6 +120,120 @@ architecture beh of controller is
     signal shift_w_valid_o, shift_w_ready_i : std_ulogic;
     signal shift_r_valid_i, shift_r_ready_o : std_ulogic;
     signal shift_w_data_o, shift_r_data_i : std_ulogic_vector(7 downto 0);
+   
+    
+    constant c_print_logs : boolean := false;
+
+    function to_fixed(s : string; len : natural) return string is
+      variable result : string(1 to len) := (others => ' ');
+    begin
+      if s'length <= len then
+        result(1 to s'length) := s;
+      else
+        result := s(1 to len);  -- truncate if longer
+      end if;
+      return result;
+    end;
+
+    procedure log_state_change(r : regs_t; rin: regs_t) is
+      constant string_len : integer := 16;
+      variable c_state, n_state : string (1 to string_len);
+    begin
+      case r.state is
+        when ST_RESET => c_state := to_fixed("ST_RESET", string_len);
+        when ST_ARRAY_GET => c_state := to_fixed("ST_ARRAY_GET", string_len);
+        when ST_ARRAY_ENTER => c_state := to_fixed("ST_ARRAY_ENTER", string_len);
+        when ST_CMD_GET => c_state := to_fixed("ST_CMD_GET", string_len);
+        when ST_CMD_EXEC => c_state := to_fixed("ST_CMD_EXEC", string_len);
+        when ST_CMD_END => c_state := to_fixed("ST_CMD_END", string_len);
+        when ST_ADDR_GET => c_state := to_fixed("ST_ADDR_GET", string_len);
+        when ST_ADDR_SET => c_state := to_fixed("ST_ADDR_SET", string_len);
+        when ST_OP_GET => c_state := to_fixed("ST_OP_GET", string_len);
+        when ST_ADDR_SET_W_R => c_state := to_fixed("ST_ADDR_SET_W_R", string_len);
+        when ST_ADDR_RUN => c_state := to_fixed("ST_ADDR_RUN", string_len);
+        when ST_ADDR_DATA => c_state := to_fixed("ST_ADDR_DATA", string_len);
+        when ST_ADDR_ACK => c_state := to_fixed("ST_ADDR_ACK", string_len);
+        when ST_WRITE_GET => c_state := to_fixed("ST_WRITE_GET", string_len);
+        when ST_WRITE_RUN => c_state := to_fixed("ST_WRITE_RUN", string_len);
+        when ST_WRITE_DATA => c_state := to_fixed("ST_WRITE_DATA", string_len);
+        when ST_WRITE_ACK => c_state := to_fixed("ST_WRITE_ACK", string_len);
+        when ST_WRITE_END => c_state := to_fixed("ST_WRITE_END", string_len);
+        when ST_READ_RUN => c_state := to_fixed("ST_READ_RUN", string_len);
+        when ST_READ_DATA => c_state := to_fixed("ST_READ_DATA", string_len);
+        when ST_READ_ACK => c_state := to_fixed("ST_READ_ACK", string_len);
+        when ST_READ_PUT => c_state := to_fixed("ST_READ_PUT", string_len);
+        when ST_READ_END => c_state := to_fixed("ST_READ_END", string_len);
+        when ST_START => c_state := to_fixed("ST_START", string_len);
+        when ST_START_WAIT => c_state := to_fixed("ST_START_WAIT", string_len);
+        when ST_STOP => c_state := to_fixed("ST_STOP", string_len);
+        when ST_STOP_WAIT => c_state := to_fixed("ST_STOP_WAIT", string_len);
+        when ST_RSP_OK_PREP => c_state := to_fixed("ST_RSP_OK_PREP", string_len);
+        when ST_RSP_OK_PUT => c_state := to_fixed("ST_RSP_OK_PUT", string_len);
+        when ST_RSP_ANACK_PREP => c_state := to_fixed("ST_RSP_ANACK_PREP", string_len);
+        when ST_RSP_ANACK_PUT => c_state := to_fixed("ST_RSP_ANACK_PUT", string_len);
+        when ST_RSP_DNACK_PREP => c_state := to_fixed("ST_RSP_DNACK_PREP", string_len);
+        when ST_RSP_DNACK_PUT => c_state := to_fixed("ST_RSP_DNACK_PUT", string_len);
+        when ST_RSP_ARRAY_HDR_PREP => c_state := to_fixed("ST_RSP_ARRAY_HDR_PREP", string_len);
+        when ST_RSP_ARRAY_HDR_PUT => c_state := to_fixed("ST_RSP_ARRAY_HDR_PUT", string_len);
+        when ST_RSP_BSTR_HDR_PREP => c_state := to_fixed("ST_RSP_BSTR_HDR_PREP", string_len);
+        when ST_RSP_BSTR_HDR_PUT => c_state := to_fixed("ST_RSP_BSTR_HDR_PUT", string_len);
+        when ST_RSP_BREAK_PREP => c_state := to_fixed("ST_RSP_BREAK_PREP", string_len);
+        when ST_RSP_BREAK_PUT => c_state := to_fixed("ST_RSP_BREAK_PUT", string_len);
+        when ST_IO_FLUSH_GET => c_state := to_fixed("ST_IO_FLUSH_GET", string_len);
+        when ST_IO_FLUSH_PUT => c_state := to_fixed("ST_IO_FLUSH_PUT", string_len);
+        when others => c_state := to_fixed("UNKNOWN", string_len);
+      end case;
+
+      case rin.state is
+        when ST_RESET => n_state := to_fixed("ST_RESET", string_len);
+        when ST_ARRAY_GET => n_state := to_fixed("ST_ARRAY_GET", string_len);
+        when ST_ARRAY_ENTER => n_state := to_fixed("ST_ARRAY_ENTER", string_len);
+        when ST_CMD_GET => n_state := to_fixed("ST_CMD_GET", string_len);
+        when ST_CMD_EXEC => n_state := to_fixed("ST_CMD_EXEC", string_len);
+        when ST_CMD_END => n_state := to_fixed("ST_CMD_END", string_len);
+        when ST_ADDR_GET => n_state := to_fixed("ST_ADDR_GET", string_len);
+        when ST_ADDR_SET => n_state := to_fixed("ST_ADDR_SET", string_len);
+        when ST_OP_GET => n_state := to_fixed("ST_OP_GET", string_len);
+        when ST_ADDR_SET_W_R => n_state := to_fixed("ST_ADDR_SET_W_R", string_len);
+        when ST_ADDR_RUN => n_state := to_fixed("ST_ADDR_RUN", string_len);
+        when ST_ADDR_DATA => n_state := to_fixed("ST_ADDR_DATA", string_len);
+        when ST_ADDR_ACK => n_state := to_fixed("ST_ADDR_ACK", string_len);
+        when ST_WRITE_GET => n_state := to_fixed("ST_WRITE_GET", string_len);
+        when ST_WRITE_RUN => n_state := to_fixed("ST_WRITE_RUN", string_len);
+        when ST_WRITE_DATA => n_state := to_fixed("ST_WRITE_DATA", string_len);
+        when ST_WRITE_ACK => n_state := to_fixed("ST_WRITE_ACK", string_len);
+        when ST_WRITE_END => n_state := to_fixed("ST_WRITE_END", string_len);
+        when ST_READ_RUN => n_state := to_fixed("ST_READ_RUN", string_len);
+        when ST_READ_DATA => n_state := to_fixed("ST_READ_DATA", string_len);
+        when ST_READ_ACK => n_state := to_fixed("ST_READ_ACK", string_len);
+        when ST_READ_PUT => n_state := to_fixed("ST_READ_PUT", string_len);
+        when ST_READ_END => n_state := to_fixed("ST_READ_END", string_len);
+        when ST_START => n_state := to_fixed("ST_START", string_len);
+        when ST_START_WAIT => n_state := to_fixed("ST_START_WAIT", string_len);
+        when ST_STOP => n_state := to_fixed("ST_STOP", string_len);
+        when ST_STOP_WAIT => n_state := to_fixed("ST_STOP_WAIT", string_len);
+        when ST_RSP_OK_PREP => n_state := to_fixed("ST_RSP_OK_PREP", string_len);
+        when ST_RSP_OK_PUT => n_state := to_fixed("ST_RSP_OK_PUT", string_len);
+        when ST_RSP_ANACK_PREP => n_state := to_fixed("ST_RSP_ANACK_PREP", string_len);
+        when ST_RSP_ANACK_PUT => n_state := to_fixed("ST_RSP_ANACK_PUT", string_len);
+        when ST_RSP_DNACK_PREP => n_state := to_fixed("ST_RSP_DNACK_PREP", string_len);
+        when ST_RSP_DNACK_PUT => n_state := to_fixed("ST_RSP_DNACK_PUT", string_len);
+        when ST_RSP_ARRAY_HDR_PREP => n_state := to_fixed("ST_RSP_ARRAY_HDR_PREP", string_len);
+        when ST_RSP_ARRAY_HDR_PUT => n_state := to_fixed("ST_RSP_ARRAY_HDR_PUT", string_len);
+        when ST_RSP_BSTR_HDR_PREP => n_state := to_fixed("ST_RSP_BSTR_HDR_PREP", string_len);
+        when ST_RSP_BSTR_HDR_PUT => n_state := to_fixed("ST_RSP_BSTR_HDR_PUT", string_len);
+        when ST_RSP_BREAK_PREP => n_state := to_fixed("ST_RSP_BREAK_PREP", string_len);
+        when ST_RSP_BREAK_PUT => n_state := to_fixed("ST_RSP_BREAK_PUT", string_len);
+        when ST_IO_FLUSH_GET => n_state := to_fixed("ST_IO_FLUSH_GET", string_len);
+        when ST_IO_FLUSH_PUT => n_state := to_fixed("ST_IO_FLUSH_PUT", string_len);
+        when others => n_state := to_fixed("UNKNOWN", string_len);
+      end case;
+
+    if c_print_logs then
+      nsl_simulation.logging.log_info("In " & c_state & " => " & n_state & character'val(10));
+    end if;
+
+    end procedure;
 
 begin
 
@@ -181,6 +294,10 @@ begin
     begin
       if rising_edge(clock_i) then
         r <= rin;
+        if rin.state = r.state then
+        else
+          log_state_change(r => r, rin => rin);
+        end if;
       end if;
       if reset_n_i = '0' then
         r.state <= ST_RESET;
@@ -204,27 +321,25 @@ begin
       
       case r.state is
         when ST_RESET =>
-          report "In ST_RESET" severity note;
-          rin.divisor <= (others => '1');
-          rin.state <= ST_ARRAY_GET;
-          rin.parser <= nsl_data.cbor.reset;
-          rin.word_count <= 0;
+          nsl_simulation.logging.log_info("In ST_RESET");
+          rin.divisor       <= (others => '1');
+          rin.state         <= ST_ARRAY_GET;
+          rin.parser        <= nsl_data.cbor.reset;
+          rin.word_count    <= 0;
           rin.command_count <= (others => '0');
-          rin.addr <= (others => '0');
-          rin.data <= (others => '0');
-          rin.last <= false;
-          rin.encoded <= (others => (others => '-') );
-          rin.encoded_len <= 0;
-          rin.encoded_i <= 0;
+          rin.addr          <= (others => '0');
+          rin.data          <= (others => '-');
+          rin.last          <= false;
+          rin.encoded       <= (others => (others => '-') );
+          rin.encoded_len   <= 0;
+          rin.encoded_i     <= 0;
           rin.cmd_cancelled <= false;
 
         when ST_ARRAY_GET =>
             if cmd_i.valid = '1' then
-              -- report "In ST_ARRAY_GET, parsing a byte" severity note;
+              nsl_simulation.logging.log_info("In ST_ARRAY_GET, parsing a byte");
               rin.parser <= nsl_data.cbor.feed(r.parser, cmd_i.data(0));
               if nsl_data.cbor.is_last( r.parser, cmd_i.data(0) ) then
-                report "In ST_ARRAY_GET, going to ST_ARRAY_ENTER" severity note;
-                report "========================================" severity note;
                 rin.state <= ST_ARRAY_ENTER;
               end if;
             end if;
@@ -232,28 +347,22 @@ begin
         when ST_ARRAY_ENTER =>
           if nsl_data.cbor.kind(r.parser) = KIND_ARRAY then
             if not r.parser.indefinite then
-              report "In ST_ARRAY_ENTER, command count set to " & nsl_data.text.to_string(nsl_data.cbor.arg(r.parser, 32));
               rin.command_count <= nsl_data.cbor.arg(r.parser, 32);
               rin.indefinite    <= false;
             else
               rin.indefinite    <= true;
             end if;
             rin.parser <= nsl_data.cbor.reset;
-            report "In ST_ARRAY_ENTER, going to ST_CMD_GET (via ST_RSP_ARRAY_HDR_PREP)" severity note;
-            report "==================================================================" severity note;
             rin.state  <= ST_RSP_ARRAY_HDR_PREP;
           else 
-            -- rin.state <= ST_FLUSH;
+            -- rin.state <= ST_FLUSH; -- TODO ??
           end if;
 
         when ST_CMD_GET =>
             if cmd_i.valid = '1' then
-              -- report "In ST_CMD_GET, parsing a byte" severity note;
+              nsl_simulation.logging.log_info("In ST_CMD_GET, parsing a byte");
               rin.parser <= nsl_data.cbor.feed(r.parser, cmd_i.data(0));
-              -- report "cmd_i.data(0) is " & nsl_data.text.to_hex_string(cmd_i.data(0));
               if nsl_data.cbor.is_last( r.parser, cmd_i.data(0) ) then
-                report "In ST_CMD_GET, going to ST_CMD_EXEC" severity note;
-                report "========================================" severity note;
                 rin.cmd_cancelled <= false;
                 rin.state <= ST_CMD_EXEC;
               end if;
@@ -261,59 +370,44 @@ begin
 
         when ST_CMD_EXEC =>
           if nsl_data.cbor.kind(r.parser) = KIND_ARRAY then
-            report "In ST_CMD_EXEC, going to ST_ADDR_GET" severity note;
             rin.state  <= ST_ADDR_GET;
           elsif nsl_data.cbor.kind(r.parser) = KIND_NULL then
-            report "In ST_CMD_EXEC, going to ST_STOP" severity note;
             rin.state  <= ST_STOP;
           elsif nsl_data.cbor.kind(r.parser) = KIND_BREAK then
             if r.indefinite then
-              report "In ST_CMD_EXEC, found a break, going to ST_ARRAY_GET (via ST_RSP_BREAK_PUT)" severity note;
               rin.state  <= ST_RSP_BREAK_PREP;
             else 
-              report "In ST_CMD_EXEC, found a break in an item of definite lenght" severity warning;
             end if;
           else
-            report "in ST_CMD_EXEC, Type of item was not the expected one" severity warning;
             rin.state <= ST_RSP_BREAK_PREP;
           end if;
           rin.parser <= nsl_data.cbor.reset;
           if not r.indefinite then
             rin.command_count <= (r.command_count - 1) mod 32;
           end if;
-          report "========================================" severity note;
 
         when ST_ADDR_GET =>
             if cmd_i.valid = '1' then
-              -- report "In ST_ADDR_GET, parsing a byte" severity note;
+              nsl_simulation.logging.log_info("In ST_ADDR_GET, parsing a byte");
               rin.parser <= nsl_data.cbor.feed(r.parser, cmd_i.data(0));
-              -- report "cmd_i.data(0) is " & nsl_data.text.to_hex_string(cmd_i.data(0));
               if nsl_data.cbor.is_last( r.parser, cmd_i.data(0) ) then
-                report "In ST_ADDR_GET, going to ST_ADDR_SET" severity note;
-                report "========================================" severity note;
                 rin.state <= ST_ADDR_SET;
               end if;
             end if;
           
         when ST_ADDR_SET =>
           if nsl_data.cbor.kind(r.parser) = KIND_POSITIVE then
-            report "In ST_ADDR_SET, address set to " & nsl_data.text.to_string(nsl_data.cbor.arg(r.parser, 10));
             rin.addr <= std_ulogic_vector(nsl_data.cbor.arg(r.parser, 10));       
             rin.parser <= nsl_data.cbor.reset;
             rin.state  <= ST_OP_GET;
-            report "========================================" severity note;
           else
-            report "in ST_ADDR_SET, Type of item was not the expected one" severity note;
             -- rin.state <= ST_IO_FLUSH_GET;
           end if;
 
         when ST_OP_GET =>
             if cmd_i.valid = '1' then
-              report "In ST_OP_GET, parsing a byte" severity note;
               rin.parser <= nsl_data.cbor.feed(r.parser, cmd_i.data(0));
               if nsl_data.cbor.is_last( r.parser, cmd_i.data(0) ) then
-                report "In ST_OP_GET, going to ST_ADDR_SET_W_R" severity note;
-                report "========================================" severity note;
                 rin.state <= ST_ADDR_SET_W_R;
               end if;
             end if;
@@ -322,56 +416,40 @@ begin
           rin.state <= ST_START;
           if nsl_data.cbor.kind(r.parser) = KIND_POSITIVE then
             -- READ OPERATION
-            report "In ST_ADDR_SET_W_R, going to ST_START for a READ operation" severity note;
-            report "========================================" severity note;
             rin.addr <= r.addr(8 downto 0) & '1';
             rin.word_count <= to_integer(nsl_data.cbor.arg(r.parser, 64));
             rin.word_total <= to_integer(nsl_data.cbor.arg(r.parser, 64));
           elsif nsl_data.cbor.kind(r.parser) = KIND_BSTR then
             -- WRITE OPERATION
-            report "In ST_ADDR_SET_W_R, going to ST_START for a WRITE operation" severity note;
-            report "========================================" severity note;
             rin.addr <= r.addr(8 downto 0) & '0';
             rin.word_count <= to_integer(nsl_data.cbor.arg(r.parser, 64));
             rin.word_total <= to_integer(nsl_data.cbor.arg(r.parser, 64));
           else
-            report "In ST_ADDR_SET_W_R, next operation type is not a write or a read!" severity note;
-            report "========================================" severity note;
             -- rin.state <= ST_START;
           end if;
 
         when ST_START =>
           if clocker_ready_i = '1' then
-            report "In ST_START, going to ST_START_WAIT" severity note;
-            report "========================================" severity note;
             rin.state <= ST_START_WAIT;
           end if;
 
         when ST_START_WAIT =>
           if clocker_ready_i = '1' then
             if clocker_owned_i = '1' then
-              report "In ST_START_WAIT, going to ST_ADDR_RUN" severity note;
-              report "========================================" severity note;
               rin.state <= ST_ADDR_RUN;
             else 
-              report "In ST_START_WAIT, clock not owned, going to ST_IO_FLUSH_GET" severity note;
-              report "===========================================================" severity note;
               rin.state <= ST_IO_FLUSH_GET;
             end if;
           end if;
 
         when ST_ADDR_RUN =>
           if clocker_ready_i = '1' then
-            report "In ST_ADDR_RUN, going to ST_ADDR_DATA" severity note;
-            report "====================================" severity note;
             rin.state <= ST_ADDR_DATA;
             rin.data  <= r.addr(7 downto 0);
           end if;
 
         when ST_ADDR_DATA =>
           if shift_w_ready_i = '1' then
-            report "In ST_ADDR_DATA, going to ST_ADDR_ACK" severity note;
-            report "========================================" severity note;
             rin.state <= ST_ADDR_ACK;
           end if;
 
@@ -380,45 +458,32 @@ begin
             rin.data <= (0 => not shift_r_data_i(0), others => '0');
             if shift_r_data_i(0) = '0' then -- ACK OK
               if r.addr(0) = '1' then
-                report "In ST_ADDR_ACK, going to ST_READ_RUN" severity note;
-                report "========================================" severity note;
                 rin.state <= ST_RSP_BSTR_HDR_PREP;  -- before going to
                                                     -- ST_READ_RUN, write the
                                                     -- bstr header to hold the
                                                     -- read bytes
               else
-                report "In ST_ADDR_ACK, going to ST_WRITE_GET" severity note;
-                report "========================================" severity note;
                 rin.state <= ST_WRITE_GET;
               end if;
             else
-              report "In ST_ADDR_ACK, going to ST_RSP_ANACK_PREP" severity note;
-              report "==========================================" severity note;
               rin.cmd_cancelled <= true;
-              -- rin.command_count <= (others => '0');
               rin.state <= ST_RSP_ANACK_PREP;
             end if;
           end if;
         
         when ST_READ_RUN =>
           if clocker_ready_i = '1' then
-            report "In ST_READ_RUN, going to ST_READ_DATA" severity note;
-            report "========================================" severity note;
             rin.state <= ST_READ_DATA;
           end if;
         
         when ST_READ_DATA =>
           if shift_r_valid_i = '1' then
-            report "In ST_READ_DATA, going to ST_READ_ACK" severity note;
-            report "========================================" severity note;
             rin.state <= ST_READ_ACK;
             rin.data <= shift_r_data_i;
           end if;
 
         when ST_READ_ACK =>
           if shift_w_ready_i = '1' then
-            report "In ST_READ_ACK, going to ST_READ_PUT" severity note;
-            report "====================================" severity note;
             rin.word_count <= (r.word_count - 1) mod 64;
             rin.state <= ST_READ_PUT;
             -- rin.last <= (r.word_count - 1) mod 64 = 0;
@@ -426,46 +491,35 @@ begin
        
         when ST_READ_PUT =>
           if rsp_i.ready = '1' then
-            report "In ST_READ_PUT, going to ST_READ_END" severity note;
-            report "========================================" severity note;
             rin.state <= ST_READ_END;
           end if;
         
         when ST_READ_END =>
           if r.word_count = 0 then
-            report "In ST_READ_END, going to ST_CMD_END" severity note;
             rin.state <= ST_CMD_END;
           else
-            report "In ST_READ_END, going to ST_READ_RUN" severity note;
-            rin.state <= ST_READ_RUN; -- or ST_READ_DATA??
+            rin.state <= ST_READ_RUN; -- TODO or ST_READ_DATA??
           end if;
-          report "========================================" severity note;
           
         when ST_WRITE_GET =>
           if cmd_i.valid = '1' then
             rin.data <= cmd_i.data(0);
             if not r.cmd_cancelled then
               rin.state <= ST_WRITE_RUN;
-              report "In ST_WRITE_GET, getting a byte and going to ST_WRITE_RUN" severity note;
             else
               rin.word_count <= (r.word_count - 1) mod 64;
               rin.state <= ST_WRITE_END;
-              report "[Cancelled command] In ST_WRITE_GET, discarding a byte and going to ST_WRITE_END" severity note;
+              nsl_simulation.logging.log_info("[Cancelled command] In ST_WRITE_GET, discarding a byte and going to ST_WRITE_END");
             end if;
-            report "========================================" severity note;
           end if;
 
           when ST_WRITE_RUN =>
             if clocker_ready_i = '1' then
-              report "In ST_WRITE_RUN, going to ST_WRITE_DATA" severity note;
-              report "========================================" severity note;
             rin.state <= ST_WRITE_DATA;
             end if;
 
         when ST_WRITE_DATA =>
           if shift_w_ready_i = '1' then
-            report "In ST_WRITE_DATA, going to ST_WRITE_ACK" severity note;
-            report "========================================" severity note;
             rin.state <= ST_WRITE_ACK;
           end if;
 
@@ -473,14 +527,10 @@ begin
           if shift_r_valid_i = '1' then
             rin.word_count <= (r.word_count - 1) mod 64;
             if shift_r_data_i(0) = '1' then -- NACK
-              report "In ST_WRITE_ACK, going to ST_RSP_DNACK_PREP" severity note;
-              report "========================================" severity note;
               rin.state <= ST_RSP_DNACK_PREP;
               rin.cmd_cancelled <= true;
               rin.data <= (0 => not shift_r_data_i(0), others => '0');
             else
-              report "In ST_WRITE_ACK, going to ST_WRITE_END" severity note;
-              report "========================================" severity note;
               rin.state <= ST_WRITE_END;
               rin.data <= (0 => not shift_r_data_i(0), others => '0');
             end if;
@@ -490,16 +540,12 @@ begin
           -- if rsp_i.ready = '1' then
             if r.word_count = 0 then
               if not r.cmd_cancelled then
-                report "In ST_WRITE_END, going to ST_CMD_END (via ST_RSP_OK_PREP)" severity note;
                 rin.state <= ST_RSP_OK_PREP;
               else
-                report "[Cancelled command] In ST_WRITE_END, going to ST_CMD_END (NOT via ST_RSP_OK_PREP)" severity note;
+                nsl_simulation.logging.log_info("[Cancelled command] In ST_WRITE_END, going to ST_CMD_END (NOT via ST_RSP_OK_PREP)");
                 rin.state <= ST_CMD_END;
               end if;
-              report "========================================" severity note;
             else
-              report "In ST_WRITE_END, going to ST_WRITE_GET" severity note;
-              report "========================================" severity note;
               rin.state <= ST_WRITE_GET;
             end if;
           -- end if;
@@ -515,8 +561,6 @@ begin
 
         when ST_IO_FLUSH_GET =>
           if cmd_i.valid = '1' then
-            report "In ST_IO_FLUSH_GET, going to ST_IO_FLUSH_PUT" severity note;
-            report "========================================" severity note;
             rin.state <= ST_IO_FLUSH_PUT;
           end if;
 
@@ -524,67 +568,47 @@ begin
           if rsp_i.ready = '1' then
             rin.word_count <= (r.word_count - 1) mod 64;
             if r.word_count = 0 then
-              report "In ST_IO_FLUSH_PUT, going to ST_CMD_GET" severity note;
-              report "========================================" severity note;
               rin.state <= ST_CMD_GET;
             end if;
           end if;
         
         when ST_STOP =>
           if clocker_ready_i = '1' then
-            report "In ST_STOP, going to ST_STOP_WAIT" severity note;
-            report "========================================" severity note;
             rin.state <= ST_STOP_WAIT;
           end if;
 
         when ST_STOP_WAIT => -- TODO probably I can remove it
         if clocker_ready_i = '1' then
-          report "In ST_STOP_WAIT, going to ST_CMD_END" severity note;
-          report "========================================" severity note;
           rin.state <= ST_CMD_END;
         end if;
 
         when ST_RSP_OK_PREP =>
-          report "In ST_RSP_OK_PREP going to ST_RSP_OK_PUT" severity note;
-          report "========================================" severity note;
           rin.data  <= nsl_data.cbor.cbor_null(0);
           rin.state <= ST_RSP_OK_PUT;
           
         when ST_RSP_OK_PUT =>
           if rsp_i.ready = '1' then
-            report "In ST_RSP_OK_PUT going to ST_CMD_GET" severity note;
-            report "========================================" severity note;
             rin.state <= ST_CMD_END;
           end if;
         
         when ST_RSP_ANACK_PREP =>
-          report "In ST_RSP_ANACK_PREP going to ST_RSP_ANACK_PUT" severity note;
-          report "========================================" severity note;
           rin.data  <= nsl_data.cbor.cbor_false(0);
           rin.state <= ST_RSP_ANACK_PUT;
         
         when ST_RSP_ANACK_PUT =>
           if rsp_i.ready = '1' then
             if r.addr(0) = '1' then
-              report "In ST_RSP_ANACK_PUT, going to ST_CMD_END" severity note;
-              report "========================================" severity note;
               rin.state <= ST_CMD_END;
             else
               -- In the case of write operations, must read all the bytes to
               -- read, even if they will not be written.
-              report "In ST_RSP_ANACK_PUT, going to ST_WRITE_GET" severity note;
-              report "========================================" severity note;
               rin.state <= ST_WRITE_GET;
             end if;
           end if;
         
         when ST_RSP_DNACK_PREP =>
-          report "In ST_RSP_DNACK_PREP going to ST_RSP_DNACK_PUT" severity note;
-          report "==============================================" severity note;
-          -- nsl_data.bytestream.write(s => cbr_encoded, d => nsl_data.cbor.cbor_positive(value => to_integer(to_unsigned(r.word_count, 6))));
-          -- report "cbr_encoded" & nsl_data.text.to_string(cbr_encoded.all);
           nsl_data.bytestream.write(s => cbr_encoded, d => nsl_data.cbor.cbor_tagged(tag => 2, item => nsl_data.cbor.cbor_positive(value => to_integer(to_unsigned(r.word_total - r.word_count - 1, 6))) ) );
-          report "cbr_encoded " & nsl_data.text.to_string(cbr_encoded.all);
+          nsl_simulation.logging.log_info("cbr_encoded " & nsl_data.text.to_string(cbr_encoded.all) );
 
           rin.encoded_len <= cbr_encoded.all'length;
           rin.encoded(cbr_encoded.all'length-1 downto 0) <= cbr_encoded.all;
@@ -596,8 +620,6 @@ begin
         when ST_RSP_DNACK_PUT  =>
           if rsp_i.ready = '1' then
             if r.encoded_len - 1 = r.encoded_i then
-              report "In ST_RSP_DNACK_PUT going to ST_WRITE_END" severity note;
-              report "=======================================" severity note;
               rin.state <= ST_WRITE_END;
               rin.encoded_len <= 0;
               rin.encoded_i <= 0;
@@ -723,8 +745,8 @@ begin
           rsp_o <= nsl_amba.axi4_stream.transfer( cfg => axi_s_cfg_c, bytes => nsl_data.bytestream.from_suv(r.data) , last => r.last);
 
         when ST_RSP_BSTR_HDR_PUT | ST_RSP_ARRAY_HDR_PUT | ST_RSP_DNACK_PUT =>
-          report "r.encoded_len " & nsl_data.text.to_string(r.encoded_len) & " sending r.encoded(" & nsl_data.text.to_string(r.encoded_len - r.encoded_i - 1) & " downto " & nsl_data.text.to_string(r.encoded_len - r.encoded_i - 1) & ")"  severity note;
-          report "r.encoded " & nsl_data.text.to_string(r.encoded) severity note;
+          -- nsl_simulation.logging.log_info("r.encoded_len " & nsl_data.text.to_string(r.encoded_len) & " sending r.encoded(" & nsl_data.text.to_string(r.encoded_len - r.encoded_i - 1) & " downto " & nsl_data.text.to_string(r.encoded_len - r.encoded_i - 1) & ")" );
+          -- nsl_simulation.logging.log_info("r.encoded " & nsl_data.text.to_string(r.encoded));
           rsp_o <= nsl_amba.axi4_stream.transfer( cfg => axi_s_cfg_c, bytes => r.encoded(r.encoded_len - r.encoded_i - 1 downto r.encoded_len - r.encoded_i - 1), last => r.last);
        
         when ST_IO_FLUSH_GET =>
