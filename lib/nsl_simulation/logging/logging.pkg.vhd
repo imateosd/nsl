@@ -10,9 +10,23 @@ package logging is
     LOG_LEVEL_ERROR,
     LOG_LEVEL_FATAL
     );
+
+  type log_color_t is (
+    LOG_COLOR_BLACK,      -- Black 	30
+    LOG_COLOR_RED,           -- Red 	  31
+    LOG_COLOR_GREEN,     -- Green 	32
+    LOG_COLOR_YELLOW,  -- Yellow 	33
+    LOG_COLOR_BLUE,        -- Blue 	  34
+    LOG_COLOR_MAGENTA, -- Magenta 35
+    LOG_COLOR_CYAN,           -- Cyan 	  36
+    LOG_COLOR_WHITE         -- White 	37
+    );                                               -- Default 39
+  
   function to_string(level : log_level_t) return string;
 
   procedure log(level : log_level_t; message : string);
+  
+  procedure log(level : log_level_t; message : string; color: log_color_t);
 
   procedure log_debug(message : string);
   procedure log_info(message : string);
@@ -59,6 +73,28 @@ package body logging is
     end if;
   end procedure;
 
+  procedure log(level : log_level_t; message : string; color: log_color_t) is
+  begin
+      case color is
+        when LOG_COLOR_BLACK =>
+          nsl_simulation.logging.log(level => level, message => character'val(27) & "[30m" & message & character'val(27) & "[0m");
+        when LOG_COLOR_RED =>
+          nsl_simulation.logging.log(level => level, message => character'val(27) & "[31m" & message & character'val(27) & "[0m");
+        when LOG_COLOR_GREEN =>
+          nsl_simulation.logging.log(level => level, message => character'val(27) & "[32m" & message & character'val(27) & "[0m");
+        when LOG_COLOR_YELLOW =>
+          nsl_simulation.logging.log(level => level, message => character'val(27) & "[33m" & message & character'val(27) & "[0m");
+        when LOG_COLOR_BLUE =>
+          nsl_simulation.logging.log(level => level, message => character'val(27) & "[34m" & message & character'val(27) & "[0m");
+        when LOG_COLOR_MAGENTA =>
+          nsl_simulation.logging.log(level => level, message => character'val(27) & "[35m" & message & character'val(27) & "[0m");
+        when LOG_COLOR_CYAN =>
+          nsl_simulation.logging.log(level => level, message => character'val(27) & "[36m" & message & character'val(27) & "[0m");
+        when LOG_COLOR_WHITE =>
+          nsl_simulation.logging.log(level => level, message => character'val(27) & "[37m" & message & character'val(27) & "[0m");
+      end case;
+    end procedure;
+  
   procedure log_debug(message : string) is
   begin
     log(LOG_LEVEL_DEBUG, message);

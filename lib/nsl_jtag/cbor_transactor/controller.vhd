@@ -1,0 +1,535 @@
+library ieee;
+use ieee.std_logic_1164.all;
+use ieee.numeric_std.all;
+
+library nsl_jtag, nsl_io, nsl_amba, nsl_data, nsl_simulation;
+use nsl_data.cbor.all;
+
+entity controller is
+  generic(
+    system_clock_c  : natural;
+    axi_s_cfg_c     : nsl_amba.axi4_stream.config_t
+    );
+  port (
+    reset_n_i       : in  std_ulogic;
+    clock_i         : in  std_ulogic;
+
+    tick_i          : in std_ulogic;
+
+    cmd_i           : in nsl_amba.axi4_stream.master_t;
+    cmd_o           : out nsl_amba.axi4_stream.slave_t;
+    rsp_o           : out nsl_amba.axi4_stream.master_t;
+    rsp_i           : in nsl_amba.axi4_stream.slave_t;
+
+    jtag_o          : out nsl_jtag.jtag.jtag_ate_o;
+    jtag_i          : in nsl_jtag.jtag.jtag_ate_i
+    );
+end entity;
+
+architecture rtl of controller is
+  
+  constant data_max_size : natural := 8;
+
+  type state_t is (
+    ST_RESET,
+
+    ST_ARRAY_GET,
+    ST_ARRAY_ENTER,
+
+    ST_CMD_GET,
+    ST_CMD_EXEC,
+    ST_CMD_END,
+
+    ST_ATE_RUN,
+    ST_ATE_WAIT_FOR_DONE,
+
+    ST_DATA_GET,
+    ST_DATA_RUN,
+    ST_DATA_GET_RSP,
+    ST_DATA_PUT,
+
+    ST_RSP_ARRAY_HDR_PREP,
+    ST_RSP_ARRAY_HDR_PUT, 
+    ST_RSP_BSTR_HDR_PREP,
+    ST_RSP_BSTR_HDR_PUT,
+    ST_RSP_BREAK_PREP,
+    ST_RSP_BREAK_PUT
+  );
+  
+  type regs_t is
+  record
+    state         : state_t;
+    cmd_pending   : nsl_jtag.ate.ate_op;
+    cmd_bit_count : natural range 0 to data_max_size - 1;
+    cmd_data      : std_ulogic_vector(7 downto 0);
+    has_tdo       : boolean;
+    has_tdi       : boolean;
+    data          : std_ulogic_vector(7 downto 0);
+    bit_count     : natural range 0 to 7;
+    word_count    : unsigned(63 downto 0);
+    parser        : nsl_data.cbor.parser_t;
+    indefinite    : boolean;
+    tag           : natural range 0 to 11;
+    command_count : unsigned(31 downto 0);
+    encoded       : nsl_data.bytestream.byte_string(8 downto 0);
+    encoded_len   : natural range 0 to 8;
+    encoded_i     : natural range 0 to 8;
+    last          : boolean;
+    cmd_cancelled : boolean;
+    inside_cmd    : boolean;
+  end record;
+
+  signal r, rin: regs_t;
+  
+  signal s_cmd_ready    : std_ulogic;
+  signal s_cmd_valid    : std_ulogic;
+  signal s_cmd_op       : nsl_jtag.ate.ate_op;
+  signal s_cmd_data     : std_ulogic_vector(data_max_size-1 downto 0);
+
+  signal s_rsp_ready    : std_ulogic;
+  signal s_rsp_valid    : std_ulogic;
+  signal s_rsp_data     : std_ulogic_vector(data_max_size-1 downto 0);
+  
+  constant c_print_logs : boolean := true;
+
+  function to_fixed(s : string; len : natural) return string is
+    variable result : string(1 to len) := (others => ' ');
+  begin
+    if s'length <= len then
+      result(1 to s'length) := s;
+    else
+      result := s(1 to len);
+    end if;
+    return result;
+  end;
+
+  procedure log_state_change(r : regs_t; rin: regs_t) is
+    constant string_len : integer := 20;
+    variable c_state, n_state : string (1 to string_len);
+  begin
+    case r.state is
+      when ST_RESET => c_state              := to_fixed("ST_RESET", string_len);
+      when ST_ARRAY_GET => c_state          := to_fixed("ST_ARRAY_GET", string_len);
+      when ST_ARRAY_ENTER => c_state        := to_fixed("ST_ARRAY_ENTER", string_len);
+      when ST_CMD_GET => c_state            := to_fixed("ST_CMD_GET", string_len);
+      when ST_CMD_EXEC => c_state           := to_fixed("ST_CMD_EXEC", string_len);
+      when ST_CMD_END => c_state            := to_fixed("ST_CMD_END", string_len);
+      when ST_DATA_GET => c_state           := to_fixed("ST_DATA_GET", string_len);
+      when ST_DATA_RUN => c_state           := to_fixed("ST_DATA_RUN", string_len);
+      when ST_DATA_PUT => c_state           := to_fixed("ST_DATA_PUT", string_len);
+      when ST_RSP_ARRAY_HDR_PREP => c_state := to_fixed("ST_RSP_ARRAY_HDR_PREP", string_len);
+      when ST_RSP_ARRAY_HDR_PUT => c_state  := to_fixed("ST_RSP_ARRAY_HDR_PUT", string_len);
+      when ST_RSP_BSTR_HDR_PREP => c_state  := to_fixed("ST_RSP_BSTR_HDR_PREP", string_len);
+      when ST_RSP_BSTR_HDR_PUT => c_state   := to_fixed("ST_RSP_BSTR_HDR_PUT", string_len);
+      when ST_RSP_BREAK_PREP => c_state     := to_fixed("ST_RSP_BREAK_PREP", string_len);
+      when ST_RSP_BREAK_PUT => c_state      := to_fixed("ST_RSP_BREAK_PUT", string_len);
+      when ST_ATE_RUN => c_state            := to_fixed("ST_ATE_RUN", string_len);
+      when ST_ATE_WAIT_FOR_DONE => c_state           := to_fixed("ST_ATE_WAIT_FOR_DONE", string_len);
+      when ST_DATA_GET_RSP => c_state           := to_fixed("ST_DATA_GET_RSP", string_len);
+      when others => c_state                := to_fixed("UNKNOWN", string_len);
+    end case;
+    case rin.state is
+      when ST_RESET => n_state              := to_fixed("ST_RESET", string_len);
+      when ST_ARRAY_GET => n_state          := to_fixed("ST_ARRAY_GET", string_len);
+      when ST_ARRAY_ENTER => n_state        := to_fixed("ST_ARRAY_ENTER", string_len);
+      when ST_CMD_GET => n_state            := to_fixed("ST_CMD_GET", string_len);
+      when ST_CMD_EXEC => n_state           := to_fixed("ST_CMD_EXEC", string_len);
+      when ST_CMD_END => n_state            := to_fixed("ST_CMD_END", string_len);
+      when ST_DATA_GET => n_state           := to_fixed("ST_DATA_GET", string_len);
+      when ST_DATA_RUN => n_state           := to_fixed("ST_DATA_RUN", string_len);
+      when ST_DATA_PUT => n_state           := to_fixed("ST_DATA_PUT", string_len);
+      when ST_RSP_ARRAY_HDR_PREP => n_state := to_fixed("ST_RSP_ARRAY_HDR_PREP", string_len);
+      when ST_RSP_ARRAY_HDR_PUT => n_state  := to_fixed("ST_RSP_ARRAY_HDR_PUT", string_len);
+      when ST_RSP_BSTR_HDR_PREP => n_state  := to_fixed("ST_RSP_BSTR_HDR_PREP", string_len);
+      when ST_RSP_BSTR_HDR_PUT => n_state   := to_fixed("ST_RSP_BSTR_HDR_PUT", string_len);
+      when ST_RSP_BREAK_PREP => n_state     := to_fixed("ST_RSP_BREAK_PREP", string_len);
+      when ST_RSP_BREAK_PUT => n_state      := to_fixed("ST_RSP_BREAK_PUT", string_len);
+      when ST_ATE_RUN => n_state            := to_fixed("ST_ATE_RUN", string_len);
+      when ST_ATE_WAIT_FOR_DONE => n_state           := to_fixed("ST_ATE_WAIT_FOR_DONE", string_len);
+      when ST_DATA_GET_RSP => n_state           := to_fixed("ST_DATA_GET_RSP", string_len);
+      when others => n_state                := to_fixed("UNKNOWN", string_len);
+    end case;
+    if c_print_logs then
+      nsl_simulation.logging.log_info("In " & c_state & " => " & n_state & character'val(10));
+    end if;
+  end procedure;
+
+begin
+  
+  reg: process(clock_i, reset_n_i)
+  begin
+    if rising_edge(clock_i) then
+      r <= rin;
+      if rin.state = r.state then
+      else
+        log_state_change(r => r, rin => rin);
+      end if;
+    end if;
+    if reset_n_i = '0' then
+      r.state <= ST_RESET;
+    end if;
+  end process;
+
+  transition: process(cmd_i, r, rsp_i,
+                      s_cmd_ready, s_rsp_data, s_rsp_valid)
+      variable cbr_encoded : nsl_data.bytestream.byte_stream;
+  begin
+    rin <= r;
+
+    rin.last <= false;
+
+    case r.state is
+      
+      when ST_RESET =>
+          nsl_simulation.logging.log_info("In ST_RESET");
+
+          rin.has_tdo       <= true;
+          rin.has_tdi       <= true;
+          rin.data          <= (others => '-');
+          rin.bit_count     <= 0;
+          rin.word_count    <= (others => '0');
+          rin.parser        <= nsl_data.cbor.reset;
+          rin.indefinite    <= false;
+          rin.command_count <= (others => '0');
+          rin.encoded       <= (others => (others => '-') );
+          rin.encoded_len   <= 0;
+          rin.encoded_i     <= 0;
+          rin.last          <= false;
+          rin.cmd_cancelled <= false;
+          rin.inside_cmd    <= false;
+          rin.tag           <= 0;
+
+          rin.state         <= ST_ARRAY_GET;
+
+      when ST_ARRAY_GET =>
+          if cmd_i.valid = '1' then
+            nsl_simulation.logging.log_info("In ST_ARRAY_GET, parsing a byte");
+            rin.parser <= nsl_data.cbor.feed(r.parser, cmd_i.data(0));
+            if nsl_data.cbor.is_last( r.parser, cmd_i.data(0) ) then
+              rin.state <= ST_ARRAY_ENTER;
+            end if;
+          end if;
+
+      when ST_ARRAY_ENTER =>
+        if nsl_data.cbor.kind(r.parser) = nsl_data.cbor.KIND_ARRAY then
+          if not r.parser.indefinite then
+            nsl_simulation.logging.log_info("r.command_count set to " & nsl_data.text.to_string(nsl_data.cbor.arg(r.parser, 32)));
+            rin.command_count <= nsl_data.cbor.arg(r.parser, 32);
+            rin.indefinite    <= false;
+          else
+            rin.indefinite    <= true;
+          end if;
+          rin.parser <= nsl_data.cbor.reset;
+          rin.state  <= ST_RSP_ARRAY_HDR_PREP;
+        else 
+           -- TODO ??
+        end if;
+
+      when ST_CMD_GET =>
+          if cmd_i.valid = '1' then
+            nsl_simulation.logging.log_info("In ST_CMD_GET, parsing a byte");
+            nsl_simulation.logging.log_info("cmd_i.data(0) " & nsl_data.text.to_hex_string(cmd_i.data(0)));
+            rin.parser <= nsl_data.cbor.feed(r.parser, cmd_i.data(0));
+            if nsl_data.cbor.is_last( r.parser, cmd_i.data(0) ) then
+              rin.cmd_cancelled <= false;
+              rin.state <= ST_CMD_EXEC;
+            end if;
+            if not r.indefinite and not r.inside_cmd then
+              rin.command_count <= (r.command_count - 1) mod 32;
+            end if;
+          end if;
+
+      when ST_CMD_EXEC =>
+        rin.inside_cmd <= false;
+        if nsl_data.cbor.kind(r.parser) = nsl_data.cbor.KIND_TAG then
+          rin.tag <= nsl_data.cbor.arg_int(r.parser);
+          if nsl_data.cbor.arg_int(r.parser) > 0 and nsl_data.cbor.arg_int(r.parser) < 8 then
+            rin.bit_count  <= data_max_size - 1 - nsl_data.cbor.arg_int(r.parser);
+            rin.inside_cmd <= true;
+            rin.state      <= ST_CMD_GET; -- going to get the bstr header
+          elsif nsl_data.cbor.arg_int(r.parser) = 8 then -- SHIFT with no TDI
+            rin.has_tdi    <= false;
+            rin.inside_cmd <= true;
+            rin.state      <= ST_CMD_GET; -- going to get the number of cycles to shift
+          elsif nsl_data.cbor.arg_int(r.parser) = 9 then -- SHIFT with no TDO
+            rin.has_tdo    <= false;
+            rin.inside_cmd <= true;
+            rin.state      <= ST_CMD_GET; -- going to get the data to SHIFT IN
+          elsif nsl_data.cbor.arg_int(r.parser) = 10 then -- reset for N cycles
+            rin.cmd_pending <= nsl_jtag.ate.ATE_OP_RESET;
+            rin.inside_cmd <= true;
+            rin.state      <= ST_CMD_GET;  -- going to get the number of cycles
+          elsif nsl_data.cbor.arg_int(r.parser) = 11 then -- RTI for N ms
+            rin.cmd_pending <= nsl_jtag.ate.ATE_OP_RTI;
+            rin.inside_cmd <= true;
+            rin.state      <= ST_CMD_GET; -- going to get the number of ms
+          end if;
+        
+        elsif nsl_data.cbor.kind(r.parser) = nsl_data.cbor.KIND_POSITIVE then
+          if r.tag = 0 then -- not inside a tag!!
+            nsl_simulation.logging.log_info("Running ATE_OP_RTI");
+            rin.cmd_bit_count <= 0;
+            rin.word_count  <= nsl_data.cbor.arg(r.parser, 64);
+            rin.cmd_pending <= nsl_jtag.ate.ATE_OP_RTI;
+            rin.state       <= ST_ATE_RUN;
+          elsif r.tag > 0 and r.tag < 8 then
+            nsl_simulation.logging.log_info("Running ATE_OP_SHIFT with no TDI for n bytes = " & nsl_data.text.to_string(nsl_data.cbor.arg(r.parser, 64)));
+            rin.word_count  <= nsl_data.cbor.arg(r.parser, 64);
+            rin.cmd_pending <= nsl_jtag.ate.ATE_OP_SHIFT;
+            rin.state     <= ST_RSP_BSTR_HDR_PREP;
+          elsif r.tag = 8 then
+            nsl_simulation.logging.log_info("Running ATE_OP_SHIFT with no TDI for n bytes = " & nsl_data.text.to_string(nsl_data.cbor.arg(r.parser, 64)));
+            rin.word_count  <= nsl_data.cbor.arg(r.parser, 64);
+            rin.cmd_pending <= nsl_jtag.ate.ATE_OP_SHIFT;
+            rin.state     <= ST_RSP_BSTR_HDR_PREP;
+          elsif r.tag = 10 then
+            nsl_simulation.logging.log_info("Running ATE_OP_RESET");
+            rin.cmd_bit_count <= 0;
+            rin.word_count  <= nsl_data.cbor.arg(r.parser, 64);
+            rin.cmd_pending <= nsl_jtag.ate.ATE_OP_RESET;
+            rin.state                <= ST_ATE_RUN;
+          elsif r.tag = 11 then -- run for ms
+            nsl_simulation.logging.log_info("Running ATE_OP_RTI for " & nsl_data.text.to_string(nsl_data.cbor.arg_int(r.parser)) & "ms");
+            rin.word_count  <= to_unsigned(nsl_data.cbor.arg_int(r.parser) * 1000/system_clock_c, 64 ); -- need tick speed here!!
+            rin.state       <= ST_ATE_RUN;
+          end if;
+
+        elsif nsl_data.cbor.kind(r.parser) = nsl_data.cbor.KIND_BSTR then
+          nsl_simulation.logging.log_info("Running ATE_OP_SHIFT with BSTR of length " & nsl_data.text.to_string(nsl_data.cbor.arg(r.parser, 64)));
+          rin.word_count  <= nsl_data.cbor.arg(r.parser, 64);
+          rin.cmd_pending <= nsl_jtag.ate.ATE_OP_SHIFT;
+          if r.has_tdo then
+            nsl_simulation.logging.log_info("No TDO");
+            rin.state <= ST_RSP_BSTR_HDR_PREP;
+          else
+            rin.state <= ST_DATA_GET;
+          end if;
+
+        elsif nsl_data.cbor.kind(r.parser) = nsl_data.cbor.KIND_SIMPLE then
+          rin.cmd_bit_count <= 0;
+          if nsl_data.cbor.arg_int(r.parser) = 1 then
+            nsl_simulation.logging.log_info("Running ATE_OP_DR_CAPTURE");
+            rin.cmd_pending <= nsl_jtag.ate.ATE_OP_DR_CAPTURE;
+            rin.state <= ST_ATE_RUN;
+          elsif nsl_data.cbor.arg_int(r.parser) = 2 then
+            nsl_simulation.logging.log_info("Running ATE_OP_IR_CAPTURE");
+            rin.cmd_pending <= nsl_jtag.ate.ATE_OP_IR_CAPTURE;
+            rin.state <= ST_ATE_RUN;
+          elsif nsl_data.cbor.arg_int(r.parser) = 3 then
+            nsl_simulation.logging.log_info("Running ATE_OP_SWD_TO_JTAG");
+            rin.cmd_pending <= nsl_jtag.ate.ATE_OP_SWD_TO_JTAG;
+            rin.state <= ST_ATE_RUN;
+          end if;
+
+        elsif nsl_data.cbor.kind(r.parser) = nsl_data.cbor.KIND_BREAK then
+          if r.indefinite then
+            rin.state  <= ST_RSP_BREAK_PREP;
+          else 
+            nsl_simulation.logging.log_warning("Found break code inside definite lenght array");
+          end if;
+
+        else
+          nsl_simulation.logging.log_warning("Unknown type!");
+          rin.state <= ST_RSP_BREAK_PREP;
+        end if;
+        rin.parser <= nsl_data.cbor.reset;
+
+      when ST_CMD_END =>
+        if not r.indefinite and r.command_count = 0 then
+          rin.state <= ST_RSP_BREAK_PREP;
+        else
+          rin.state <= ST_CMD_GET;
+        end if;
+        rin.tag <= 0;
+        rin.has_tdo       <= true;
+        rin.has_tdi       <= true;
+        rin.data          <= (others => '-');
+        rin.bit_count     <= 0;
+        rin.parser <= nsl_data.cbor.reset;
+
+     when ST_ATE_RUN =>
+        if s_cmd_ready = '1' then
+          rin.state <= ST_ATE_WAIT_FOR_DONE;
+        end if;
+
+      when ST_ATE_WAIT_FOR_DONE => 
+        if s_cmd_ready = '1' then
+          if r.word_count /= 0 then
+            rin.word_count <= (r.word_count - 1) mod 64;
+            rin.state <= ST_ATE_RUN;
+          else
+            rin.state <= ST_CMD_END;
+          end if;
+        end if;
+
+      when ST_DATA_GET =>
+        rin.cmd_bit_count <= data_max_size - 1;
+        if (r.word_count = 1) and (r.bit_count /= 0) then
+          rin.cmd_bit_count <= r.bit_count;
+        end if;
+
+        if r.has_tdi then
+          if cmd_i.valid = '1' then
+            rin.cmd_data <= cmd_i.data(0);            rin.word_count <= (r.word_count - 1) mod 64;
+            rin.state <= ST_DATA_RUN;
+          end if;
+        else
+          rin.cmd_data <= (others => '0');
+          rin.word_count <= (r.word_count - 1) mod 64;
+          rin.state <= ST_DATA_RUN;
+        end if;
+
+      when ST_DATA_RUN =>
+        if s_cmd_ready = '1' then
+          rin.state <= ST_DATA_GET_RSP;
+        end if;
+
+      when ST_DATA_GET_RSP =>
+        if s_rsp_valid = '1' then
+            rin.data <= s_rsp_data;
+            rin.state <= ST_DATA_PUT;
+        end if;
+  
+      when ST_DATA_PUT =>
+        if r.has_tdo then
+          if rsp_i.ready = '1' then
+            if r.word_count = 0 then
+              rin.state <= ST_CMD_END;
+            else
+              rin.state <= ST_DATA_GET;
+            end if;
+          end if;
+          else
+            if r.word_count = 0 then
+              rin.state <= ST_CMD_END;
+            else
+              rin.state <= ST_DATA_GET;
+            end if;
+        end if;
+
+      when ST_RSP_ARRAY_HDR_PREP =>
+          nsl_data.bytestream.write(s => cbr_encoded, d => nsl_data.cbor.cbor_array_hdr(length => -1) );
+          rin.encoded_len <= cbr_encoded.all'length;
+          rin.encoded(cbr_encoded.all'length-1 downto 0) <= cbr_encoded.all;
+          rin.state <= ST_RSP_ARRAY_HDR_PUT;
+          rin.last  <= false;
+          nsl_data.bytestream.clear(s => cbr_encoded);
+          
+      when ST_RSP_ARRAY_HDR_PUT =>
+          if rsp_i.ready = '1' then
+            if r.encoded_len - 1 = r.encoded_i then
+              rin.state <= ST_CMD_GET;
+              rin.encoded_len <= 0;
+              rin.encoded_i   <= 0;
+            else
+              rin.encoded_i <= (r.encoded_i + 1) mod 9;
+            end if;
+          end if;
+
+      when ST_RSP_BSTR_HDR_PREP =>
+          nsl_data.bytestream.write(s => cbr_encoded, d => nsl_data.cbor.cbor_bstr_hdr(length => to_integer(r.word_count)));
+          rin.encoded_len <= cbr_encoded.all'length;
+          rin.encoded(cbr_encoded.all'length-1 downto 0) <= cbr_encoded.all;
+          nsl_data.bytestream.clear(s => cbr_encoded);
+          rin.state <= ST_RSP_BSTR_HDR_PUT;
+
+      when ST_RSP_BSTR_HDR_PUT =>
+          if rsp_i.ready = '1' then
+            if r.encoded_len - 1 = r.encoded_i then
+              rin.state <= ST_DATA_GET;
+              rin.encoded_len <= 0;
+              rin.encoded_i <= 0;
+            else
+              rin.encoded_i <= (r.encoded_i + 1) mod 9;
+            end if;
+          end if;
+          
+      when ST_RSP_BREAK_PREP=>
+          rin.data  <= nsl_data.cbor.cbor_break(0);
+          rin.last  <= true;
+          rin.state <= ST_RSP_BREAK_PUT;
+    
+      when ST_RSP_BREAK_PUT =>
+          if rsp_i.ready = '1' then
+            rin.state <= ST_ARRAY_GET;
+          end if;
+      when others =>
+          null;
+
+    end case;
+  end process;
+
+  s_cmd_op <= r.cmd_pending;
+  s_cmd_data <= r.cmd_data;
+
+  moore: process (r)
+  begin
+    cmd_o.ready <= '0';
+    rsp_o <= nsl_amba.axi4_stream.transfer_defaults(cfg => axi_s_cfg_c);
+
+    s_rsp_ready <= '0';
+    s_cmd_valid <= '0';
+
+  case r.state is
+
+    when ST_RESET | ST_ARRAY_ENTER | ST_CMD_EXEC | ST_CMD_END =>
+
+    when ST_ARRAY_GET =>
+      cmd_o.ready <= '1';
+
+    when ST_CMD_GET =>
+      cmd_o.ready <= '1';
+
+    when ST_ATE_RUN | ST_DATA_RUN => 
+      s_cmd_valid <= '1';
+
+    when ST_DATA_GET =>
+      if r.has_tdi then
+        cmd_o.ready <= '1';
+      end if;
+      
+    when ST_DATA_PUT =>
+      if r.has_tdo then
+        rsp_o <= nsl_amba.axi4_stream.transfer( cfg => axi_s_cfg_c, bytes => nsl_data.bytestream.from_suv(r.data), last => r.last);
+      end if;
+    
+    when ST_RSP_BREAK_PUT =>
+      rsp_o <= nsl_amba.axi4_stream.transfer( cfg => axi_s_cfg_c, bytes => nsl_data.bytestream.from_suv(r.data), last => r.last);
+
+    when ST_RSP_ARRAY_HDR_PREP | ST_RSP_BSTR_HDR_PREP | ST_RSP_BREAK_PREP =>
+
+    when ST_ATE_WAIT_FOR_DONE | ST_DATA_GET_RSP =>
+        s_rsp_ready <= '1';
+    
+    when ST_RSP_ARRAY_HDR_PUT | ST_RSP_BSTR_HDR_PUT =>
+      rsp_o <= nsl_amba.axi4_stream.transfer( cfg => axi_s_cfg_c, bytes => r.encoded(r.encoded_len - r.encoded_i - 1 downto r.encoded_len - r.encoded_i - 1), last => r.last);
+
+  end case;
+  end process;
+
+  ate: nsl_jtag.ate.jtag_ate
+    generic map (
+      data_max_size => data_max_size,
+      allow_pipelining => false
+      )
+    port map (
+      reset_n_i => reset_n_i,
+      clock_i   => clock_i,
+
+      tick_i => tick_i,
+
+      cmd_ready_o   => s_cmd_ready,
+      cmd_valid_i   => s_cmd_valid,
+      cmd_op_i      => s_cmd_op,
+      cmd_data_i    => s_cmd_data,
+      cmd_size_m1_i => r.cmd_bit_count,
+
+      rsp_ready_i => s_rsp_ready,
+      rsp_valid_o => s_rsp_valid,
+      rsp_data_o  => s_rsp_data,
+
+      jtag_o => jtag_o,
+      jtag_i => jtag_i
+      );
+
+end architecture;
