@@ -1,0 +1,522 @@
+library ieee;
+use ieee.std_logic_1164.all;
+use ieee.numeric_std.all;
+
+library nsl_spi, nsl_io, nsl_logic, nsl_data, nsl_simulation, nsl_amba;
+use nsl_data.cbor.all;
+
+entity controller is
+  generic(
+    system_clock_c : natural;
+    axi_s_cfg_c    : nsl_amba.axi4_stream.config_t;
+    slave_count_c : natural range 1 to 7 := 1
+    );
+  port(
+    clock_i    : in std_ulogic;
+    reset_n_i : in std_ulogic;
+
+    tick_i     : in std_ulogic;
+
+    sck_o  : out std_ulogic;
+    cs_n_o  : out nsl_io.io.opendrain_vector(0 to slave_count_c-1);
+    mosi_o : out nsl_io.io.tristated;
+    miso_i : in  std_ulogic;
+
+    cmd_i : in  nsl_amba.axi4_stream.master_t;
+    cmd_o : out nsl_amba.axi4_stream.slave_t;
+    rsp_o : out nsl_amba.axi4_stream.master_t;
+    rsp_i : in nsl_amba.axi4_stream.slave_t
+    );
+end entity;
+
+architecture rtl of controller is
+
+  -- type state_t is (
+  --   ST_RESET,
+  --   ST_IDLE,
+  --   ST_ROUTE,
+  --   ST_DATA_GET,
+  --   ST_SELECTED_PRE,
+  --   ST_SELECTED_POST,
+  --   ST_SHIFT_FIRST_HALF,
+  --   ST_SHIFT_SECOND_HALF,
+  --   ST_DATA_PUT,
+  --   ST_RSP,
+  --   ST_RSP_OUT_ONLY
+  --   );
+
+
+  -- SPI_CMD_SHIFT_OUT -> bstr
+  --                   -> tag (1 to 7) -> bstr
+  --                   -> tag 9 -> bstr
+  -- SPI_CMD_SHIFT_IN  -> tag 8
+  --                   -> 
+  -- SPI_CMD_SHIFT_IO  -> 
+  -- SPI_CMD_SELECT
+  -- SPI_CMD_SELECT_CPOL
+  -- SPI_CMD_SELECT_CPOL
+  -- SPI_CMD_SELECT_CPHA
+  -- SPI_CMD_SELECT_CPHA
+  -- SPI_CMD_SELECT_MODE
+  -- SPI_CMD_SELECT_MODE
+  -- SPI_CMD_SELECT_MODE
+  -- SPI_CMD_SELECT_MODE
+  -- SPI_CMD_UNSELECT
+  -- SPI_CMD_DIVH
+  -- SPI_CMD_DIVL
+  -- SPI_CMD_WIDTH
+
+  type state_t is (
+    ST_RESET,
+
+    ST_ARRAY_GET,
+    ST_ARRAY_ENTER,
+
+    ST_CMD_GET,
+    ST_CMD_EXEC,
+    ST_CMD_END,
+
+    ST_CMD_GET_CS,
+    ST_CMD_GET_MODE,
+    
+    ST_DATA_GET,
+    ST_SELECTED_PRE,
+    ST_SELECTED_POST,
+    ST_SHIFT_FIRST_HALF,
+    ST_SHIFT_SECOND_HALF,
+    ST_DATA_PUT,
+
+    ST_RSP_ARRAY_HDR_PREP,
+    ST_RSP_ARRAY_HDR_PUT, 
+    ST_RSP_BSTR_HDR_PREP,
+    ST_RSP_BSTR_HDR_PUT,
+    ST_RSP_BREAK_PREP,
+    ST_RSP_BREAK_PUT
+    );
+  
+  
+  type regs_t is record
+    state               : state_t;
+    cmd                 : std_ulogic_vector(7 downto 0);
+    shreg               : std_ulogic_vector(7 downto 0);
+    word_count          : natural range 0 to 512;
+    -- word_count          : unsigned(64 downto 0);
+    selected            : natural range 0 to 7;
+    bit_count, width_m1 : natural range 0 to 7;
+    insertion_mask      : std_ulogic_vector(0 to 7);
+    
+    div                 : unsigned(6 downto 0);
+    cnt                 : unsigned(6 downto 0);
+    mosi                : std_ulogic;
+    cpol                : std_ulogic;
+    cpha                : std_ulogic;
+    has_miso            : boolean;
+    has_mosi            : boolean;
+    minus               : natural range 0 to 7;
+
+    parser              : nsl_data.cbor.parser_t;
+    tag                 : natural range 0 to 11;
+    last                : boolean;
+    command_count       : unsigned(31 downto 0);
+    indefinite          : boolean;
+    encoded             : nsl_data.bytestream.byte_string(8 downto 0);
+    encoded_len         : natural range 0 to 8;
+    encoded_i           : natural range 0 to 8;
+    cmd_cancelled       : boolean;
+    inside_cmd          : boolean;
+  end record;
+
+  signal r, rin: regs_t;
+    
+begin
+  
+  regs: process(reset_n_i, clock_i)
+  begin
+    if rising_edge(clock_i) then
+      r <= rin;
+    end if;
+    if reset_n_i = '0' then
+      r.state <= ST_RESET;
+    end if;
+  end process;
+
+  transition: process(r, cmd_i, rsp_i, miso_i, tick_i)
+    variable cbr_encoded : nsl_data.bytestream.byte_stream;
+    variable tag         : natural range 0 to 11;
+    variable mode        : std_ulogic_vector(1 downto 0);
+  begin
+    -- ready := false;
+    rin <= r;
+
+    -- ready := tick_i;
+    
+    -- if r.cnt /= (r.cnt'range => '0') then
+    --   rin.cnt <= r.cnt - 1;
+    -- else
+    --   ready := true;
+    -- end if;
+    
+    case r.state is
+      when ST_RESET =>
+        rin.state          <= ST_ARRAY_GET;
+        rin.selected       <= 7;
+        rin.div            <= "1000000";
+        rin.width_m1       <= 7;
+        rin.insertion_mask <= (7 => '1', others => '0');
+        rin.cnt            <= (others => '0');
+        rin.cpol           <= '0';
+        rin.cpha           <= '0';
+
+      -- when ST_IDLE =>
+      --   if cmd_i.valid = '1' then
+      --     rin.last <= cmd_i.last;
+      --     rin.cmd <= cmd_i.data;
+      --     rin.state <= ST_ROUTE;
+      --   end if;
+
+      when ST_ARRAY_GET =>
+        if cmd_i.valid = '1' then
+          nsl_simulation.logging.log_info("In parsing, ST_ARRAY_GET a byte");
+          rin.parser <= nsl_data.cbor.feed(r.parser, cmd_i.data(0));
+          if nsl_data.cbor.is_last( r.parser, cmd_i.data(0) ) then
+            rin.state <= ST_ARRAY_ENTER;
+          end if;
+        end if;
+
+      when ST_ARRAY_ENTER =>
+        if nsl_data.cbor.kind(r.parser) = nsl_data.cbor.KIND_ARRAY then
+          if not r.parser.indefinite then
+            nsl_simulation.logging.log_info("r.command_count set to " & nsl_data.text.to_string(nsl_data.cbor.arg(r.parser, 32)));
+            rin.command_count <= nsl_data.cbor.arg(r.parser, 32);
+            rin.indefinite    <= false;
+          else
+            rin.indefinite    <= true;
+          end if;
+          rin.parser <= nsl_data.cbor.reset;
+          rin.state  <= ST_RSP_ARRAY_HDR_PREP;
+        else 
+           -- TODO ??
+        end if;
+
+      when ST_CMD_GET =>
+          if cmd_i.valid = '1' then
+            nsl_simulation.logging.log_info("In ST_CMD_GET, parsing a byte");
+            nsl_simulation.logging.log_info("cmd_i.data(0) " & nsl_data.text.to_hex_string(cmd_i.data(0)));
+            rin.parser <= nsl_data.cbor.feed(r.parser, cmd_i.data(0));
+            if nsl_data.cbor.is_last( r.parser, cmd_i.data(0) ) then
+              rin.cmd_cancelled <= false;
+              rin.state <= ST_CMD_EXEC;
+              if not r.indefinite and not r.inside_cmd then
+                rin.command_count <= (r.command_count - 1) mod 32;
+              end if;
+            end if;
+          end if;
+
+      when ST_CMD_EXEC =>
+        rin.inside_cmd <= false;
+        rin.parser <= nsl_data.cbor.reset;
+        if nsl_data.cbor.kind(r.parser) = nsl_data.cbor.KIND_TAG then
+          tag            := nsl_data.cbor.arg_int(r.parser);
+          rin.tag        <= tag;
+          rin.inside_cmd <= true;
+          rin.state      <=  ST_CMD_GET;
+          if tag > 0 and tag < 8 then
+            nsl_simulation.logging.log_info("minus set to " & nsl_data.text.to_string(tag));
+          elsif tag = 8 then
+            rin.has_mosi <= false;
+          elsif tag = 9 then
+            rin.has_miso <= false;
+          elsif tag = 10 then
+            rin.has_mosi <= false;
+            rin.has_miso <= false;
+          else
+            null;
+          end if;
+          nsl_simulation.logging.log(level => nsl_simulation.logging.LOG_LEVEL_INFO, color => nsl_simulation.logging.LOG_COLOR_BLUE, message => "Found KIND_TAG with tag =" & nsl_data.text.to_string(tag));
+
+        elsif nsl_data.cbor.kind(r.parser) = nsl_data.cbor.KIND_POSITIVE then
+          nsl_simulation.logging.log(level => nsl_simulation.logging.LOG_LEVEL_INFO, color => nsl_simulation.logging.LOG_COLOR_BLUE, message => "Found KIND_POSITIVE with r.tag =" & nsl_data.text.to_string(r.tag));
+          if r.tag = 8 then -- SHIFT_IN (no MOSI)
+            rin.shreg <= (others => '0');
+            rin.mosi <= '0';
+            rin.bit_count <= r.width_m1;
+            rin.word_count <= nsl_data.cbor.arg_int(r.parser)/8;
+            rin.state      <= ST_RSP_BSTR_HDR_PREP;
+          elsif r.tag = 10 then -- 'pause'
+            rin.shreg <= (others => '0');
+            rin.mosi <= '0';
+            if nsl_data.cbor.arg_int(r.parser) > 8 then
+              rin.bit_count <=  nsl_data.cbor.arg_int(r.parser) - 1;
+              rin.word_count <= 1;
+            else
+              rin.bit_count <=  nsl_data.cbor.arg_int(r.parser) mod 8;
+              rin.word_count <= nsl_data.cbor.arg_int(r.parser)/8;
+              rin.state      <= ST_SHIFT_FIRST_HALF;
+            end if;
+          end if;
+
+        elsif nsl_data.cbor.kind(r.parser) = nsl_data.cbor.KIND_NULL then
+          nsl_simulation.logging.log(level => nsl_simulation.logging.LOG_LEVEL_INFO, color => nsl_simulation.logging.LOG_COLOR_BLUE, message => "Found KIND_NULL");
+          rin.selected <= slave_count_c;
+          rin.state <= ST_CMD_END;
+
+        elsif nsl_data.cbor.kind(r.parser) = nsl_data.cbor.KIND_ARRAY then
+          nsl_simulation.logging.log(level => nsl_simulation.logging.LOG_LEVEL_INFO, color => nsl_simulation.logging.LOG_COLOR_BLUE, message => "Found KIND_ARRAY");
+          rin.state <= ST_CMD_GET_CS;
+          
+        elsif nsl_data.cbor.kind(r.parser) = nsl_data.cbor.KIND_BSTR then
+          nsl_simulation.logging.log(level => nsl_simulation.logging.LOG_LEVEL_INFO, color => nsl_simulation.logging.LOG_COLOR_BLUE, message => "Found KIND_BSTR");
+          -- SHIFT_OUT or SHIFT_IO
+          rin.word_count <= nsl_data.cbor.arg_int(r.parser) - 1;
+          rin.state      <= ST_DATA_GET;
+          rin.has_mosi   <= true;
+        end if;
+
+      when ST_CMD_END =>
+        if not r.indefinite and r.command_count = 0 then
+          rin.state <= ST_RSP_BREAK_PREP;
+        else
+          rin.state <= ST_CMD_GET;
+        end if;
+        rin.tag      <= 0;
+        rin.has_mosi <= true;
+        rin.has_miso <= true;
+        rin.shreg    <= (others => '-');
+        rin.parser   <= nsl_data.cbor.reset;
+
+      when ST_CMD_GET_CS =>
+        -- if cmd_i.valid then
+        --   rin.parser <= nsl_data.cbor.feed(r.parser, cmd_i.data(0));
+        --   if nsl_data.cbor.is_last(r.parser, cmd_i.data(0)) then
+        --     rin.state    <= ST_CMD_GET_MODE;
+        --   end if;
+        -- end if;
+        if not nsl_data.cbor.is_done(r.parser) then
+          if cmd_i.valid = '1' then
+            rin.parser <= nsl_data.cbor.feed(r.parser, cmd_i.data(0));
+          end if;
+        else
+          rin.selected <= nsl_data.cbor.arg_int(r.parser);
+          rin.parser   <= nsl_data.cbor.reset;
+          rin.state    <= ST_CMD_GET_MODE;
+        end if;
+        
+      when ST_CMD_GET_MODE =>
+        -- if cmd_i.valid then
+        --   rin.parser <= nsl_data.cbor.feed(r.parser, cmd_i.data(0));
+        --   if nsl_data.cbor.is_last(r.parser, cmd_i.data(0)) then
+        --     rin.state    <= ST_SELECTED_PRE;
+        --   end if;
+        -- end if;
+        if not nsl_data.cbor.is_done(r.parser) then
+          if cmd_i.valid = '1' then
+            rin.parser <= nsl_data.cbor.feed(r.parser, cmd_i.data(0));
+          end if;
+        else
+          mode := std_ulogic_vector(nsl_data.cbor.arg(r.parser, 2));
+          nsl_simulation.logging.log_info("mode is "& nsl_data.text.to_string(mode));
+          rin.cpha     <= mode(0);
+          rin.cpol     <= mode(1);
+          rin.parser   <= nsl_data.cbor.reset;
+          rin.state    <= ST_SELECTED_PRE;
+        end if;   
+
+      when ST_DATA_GET =>
+        if cmd_i.valid = '1' then
+          rin.mosi <= cmd_i.data(0)(r.width_m1);
+          rin.shreg <= cmd_i.data(0);
+          rin.state <= ST_SHIFT_FIRST_HALF;
+          -- prepare SHIFT_OUT or SHIFT_IO
+          rin.bit_count <= r.width_m1;
+        end if;
+        
+      when ST_SELECTED_PRE =>
+        if tick_i = '1' then
+          -- rin.parser   <= nsl_data.cbor.reset;                          
+          -- mode := std_ulogic_vector(nsl_data.cbor.arg(r.parser, 2));
+          -- rin.cpha     <= mode(0);
+          -- rin.cpol     <= mode(1);
+          rin.state <= ST_SELECTED_POST;
+          rin.mosi <= '0';
+        end if;
+        
+      when ST_SELECTED_POST =>
+        if tick_i = '1' then
+          -- rin.cnt <= r.div;
+          rin.state <= ST_CMD_END;
+        end if;
+        
+      when ST_SHIFT_FIRST_HALF =>
+        if tick_i = '1' then
+          -- rin.cnt <= r.div;
+          rin.state <= ST_SHIFT_SECOND_HALF;
+          rin.shreg <= r.shreg(6 downto 0) & miso_i;
+        end if;
+
+      when ST_SHIFT_SECOND_HALF =>
+        if tick_i = '1' then
+          -- rin.cnt <= r.div;
+          if r.bit_count /= 0 then
+            rin.bit_count <= r.bit_count - 1;
+          else
+            rin.bit_count <= r.width_m1;
+          end if;
+
+          if r.bit_count /= 0 then
+            if r.has_mosi then
+              rin.mosi <= r.shreg(r.width_m1);
+            else
+              rin.mosi <= '0';
+            end if;
+            rin.state <= ST_SHIFT_FIRST_HALF;
+          else
+            if r.word_count /= 0 then
+              rin.word_count <= r.word_count - 1;
+              rin.bit_count <= r.width_m1;
+              if r.has_miso then
+                rin.state <= ST_DATA_PUT;
+              elsif r.has_mosi then
+                rin.state <= ST_DATA_GET;
+              else
+                rin.state <= ST_SHIFT_FIRST_HALF;
+              end if;
+            else
+              if r.has_miso then
+                rin.state <= ST_DATA_PUT;
+              else
+                rin.state <= ST_CMD_END;
+              end if;
+            end if;
+          end if;
+         end if;
+        
+
+      when ST_DATA_PUT =>
+        if rsp_i.ready = '1' then
+          -- rin.cnt <= r.div;
+          if r.word_count = 0 then
+            rin.state <= ST_CMD_END;
+          elsif r.has_miso and not r.has_mosi then
+            rin.shreg <= (others => '0');
+            rin.state <= ST_SHIFT_FIRST_HALF;
+          elsif r.has_mosi then -- SPI_CMD_SHIFT_IO
+            rin.state <= ST_DATA_GET;
+          end if;
+        end if;
+
+      when ST_RSP_ARRAY_HDR_PREP =>
+        nsl_data.bytestream.write(s => cbr_encoded, d => nsl_data.cbor.cbor_array_hdr(length => -1) );  
+        rin.encoded_len <= cbr_encoded.all'length;
+        rin.encoded(cbr_encoded.all'length-1 downto 0) <= cbr_encoded.all;
+        rin.state <= ST_RSP_ARRAY_HDR_PUT;
+        rin.last  <= false;
+        nsl_data.bytestream.clear(s => cbr_encoded);
+          
+      when ST_RSP_ARRAY_HDR_PUT =>
+        if rsp_i.ready = '1' then
+          if r.encoded_len - 1 = r.encoded_i then
+            rin.state <= ST_CMD_GET;
+            rin.encoded_len <= 0;
+            rin.encoded_i   <= 0;
+          else
+            rin.encoded_i <= (r.encoded_i + 1) mod 9;
+          end if;
+        end if;
+
+      when ST_RSP_BSTR_HDR_PREP =>
+        nsl_data.bytestream.write(s => cbr_encoded, d => nsl_data.cbor.cbor_bstr_hdr(length => r.word_count));
+        rin.encoded_len <= cbr_encoded.all'length;
+        rin.encoded(cbr_encoded.all'length-1 downto 0) <= cbr_encoded.all;
+        nsl_data.bytestream.clear(s => cbr_encoded);
+        rin.state <= ST_RSP_BSTR_HDR_PUT;
+
+      when ST_RSP_BSTR_HDR_PUT =>
+        if rsp_i.ready = '1' then
+          if r.encoded_len - 1 = r.encoded_i then
+            rin.encoded_len <= 0;
+            rin.encoded_i <= 0;
+            if r.has_mosi then
+              rin.state <= ST_DATA_GET;
+            else
+              rin.state <= ST_SHIFT_FIRST_HALF;
+            end if;
+          else
+            rin.encoded_i <= (r.encoded_i + 1) mod 9;
+          end if;
+        end if;
+          
+      when ST_RSP_BREAK_PREP=>
+        rin.shreg  <= nsl_data.cbor.cbor_break(0);
+        rin.last  <= true;
+        rin.state <= ST_RSP_BREAK_PUT;
+    
+      when ST_RSP_BREAK_PUT =>
+        if rsp_i.ready = '1' then
+          rin.state <= ST_ARRAY_GET;
+        end if;
+      
+      when others =>
+          null;
+    end case;
+  end process;
+
+  moore: process(r)
+  begin
+    cmd_o.ready <= '0';
+    rsp_o.valid <= '0';
+    rsp_o.last <= '-';
+    rsp_o.data(0) <= (others => '-');
+
+    for i in cs_n_o'range
+    loop
+      if r.selected = i then
+        cs_n_o(i).drain_n <= '0';
+      else
+        cs_n_o(i).drain_n <= '1';
+      end if;
+    end loop;
+    mosi_o <= nsl_io.io.to_tristated(r.mosi, r.selected < slave_count_c);
+    sck_o <= r.cpol;
+
+    case r.state is
+      when ST_RESET | ST_SELECTED_PRE | ST_SELECTED_POST =>
+        null;
+
+      when ST_ARRAY_ENTER | ST_CMD_EXEC | ST_CMD_END =>
+        null;
+
+      when ST_SHIFT_FIRST_HALF =>
+        -- if r.tag /= 10 then
+        sck_o <= r.cpol xor r.cpha;
+        -- end if;
+
+      when ST_SHIFT_SECOND_HALF =>
+        -- if r.tag /= 10 then
+        sck_o <= r.cpol xnor r.cpha;
+        -- end if;
+
+      when ST_ARRAY_GET | ST_CMD_GET | ST_DATA_GET =>
+        cmd_o.ready <= '1';
+
+      when ST_CMD_GET_MODE | ST_CMD_GET_CS =>
+        if not nsl_data.cbor.is_done(r.parser) then
+          cmd_o.ready <= '1';
+        end if;
+
+      when ST_DATA_PUT =>
+        if r.has_miso then -- should never get here without r.has_miso being true..
+          rsp_o <= nsl_amba.axi4_stream.transfer( cfg => axi_s_cfg_c, bytes => nsl_data.bytestream.from_suv(r.shreg), last => false);
+        end if;
+    
+    when ST_RSP_BREAK_PUT =>
+      rsp_o <= nsl_amba.axi4_stream.transfer( cfg => axi_s_cfg_c, bytes => nsl_data.bytestream.from_suv(r.shreg), last => r.last);
+
+    when ST_RSP_ARRAY_HDR_PREP | ST_RSP_BSTR_HDR_PREP | ST_RSP_BREAK_PREP =>
+    
+    when ST_RSP_ARRAY_HDR_PUT | ST_RSP_BSTR_HDR_PUT =>
+      rsp_o <= nsl_amba.axi4_stream.transfer( cfg => axi_s_cfg_c, bytes => r.encoded(r.encoded_len - r.encoded_i - 1 downto r.encoded_len - r.encoded_i - 1), last => r.last);
+
+    end case;
+  end process;
+  
+end architecture;
