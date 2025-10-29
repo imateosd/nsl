@@ -4,8 +4,10 @@ use ieee.numeric_std.all;
 
 library nsl_jtag, nsl_io, nsl_amba, nsl_data;
 
+-- JTAG ATE transactor that takes as command stream a pair of AXI Stream pipes.
 package cbor_transactor is
-    -- Responds to CBOR-encoded commands that follow to this specification (CDDL describing valid commands)
+
+    -- Responds to CBOR-encoded commands that follow this specification (CDDL describing valid commands)
 
     -- A command stream is an array of commands
     -- commands = [* command]

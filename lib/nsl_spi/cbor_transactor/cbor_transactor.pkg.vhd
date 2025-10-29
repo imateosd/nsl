@@ -4,44 +4,48 @@ use ieee.numeric_std.all;
 
 library nsl_spi, nsl_amba, nsl_data, nsl_io;
 
--- SPI master transactor that takes command stream a pair of AXI Stream pipes.
+-- SPI master transactor that takes as command stream a pair of AXI Stream pipes.
 package cbor_transactor is
-    -- ; A command stream is an array of commands 
-  -- commands = [* command]
-  -- ; A command can be one of the SPI operations
-  -- command = spi-shift
-  --         / spi-select
-  --         / spi-unselect
-  --         / spi-pause        
+  
+    -- Responds to CBOR-encoded commands that follow this specification (CDDL describing valid commands)
 
-  -- spi-shift         = spi-shift-bytes
-  --                   / spi-shift-short
-  --                   / spi-shift-cycles
-  -- spi-shift-bytes   = bstr .size (1..4095)
-  -- spi-shift-short   = spi-shift-minus1 / spi-shift-minus2 / spi-shift-minus3
-  --                    / spi-shift-minus4 / spi-shift-minus5 / spi-shift-minus6
-  --                    / spi-shift-minus7
+    -- A command stream is an array of commands 
+    -- commands = [* command]
 
-  -- spi-shift-minus1  = #6.1(spi-shift-bytes) ; do not shift the last 1 bits of the argument                  
-  -- spi-shift-minus2  = #6.2(spi-shift-bytes) ; do not shift the last 2 bits of the argument                  
-  -- spi-shift-minus3  = #6.3(spi-shift-bytes) ; do not shift the last 3 bits of the argument                  
-  -- spi-shift-minus4  = #6.4(spi-shift-bytes) ; do not shift the last 4 bits of the argument                  
-  -- spi-shift-minus5  = #6.5(spi-shift-bytes) ; do not shift the last 5 bits of the argument
-  -- spi-shift-minus6  = #6.6(spi-shift-bytes) ; do not shift the last 6 bits of the argument                  
-  -- spi-shift-minus7  = #6.7(spi-shift-bytes) ; do not shift the last 7 bits of the argument                  
+    -- A command can be one of the SPI operations
+    -- command = spi-shift
+    --         / spi-select
+    --         / spi-unselect
+    --         / spi-pause        
 
-  -- spi-shift-cycles  = #6.8(1..65535)  ; returns bstr of (size + 7) / 8
-  -- spi-shift-no-miso = #6.9(spi-shift) ; will not return data
-  -- spi-pause         = #6.10(uint)     ; wait for x bit time
+    -- spi-shift         = spi-shift-bytes
+    --                   / spi-shift-short
+    --                   / spi-shift-cycles
+    -- spi-shift-bytes   = bstr .size (1..4095)
+    -- spi-shift-short   = spi-shift-minus1 / spi-shift-minus2 / spi-shift-minus3
+    --                    / spi-shift-minus4 / spi-shift-minus5 / spi-shift-minus6
+    --                    / spi-shift-minus7
 
-  -- spi-select        = [cs, mode]
-  -- cs                = 0..3
-  -- mode              = 0..3
-  -- spi-unselect      = null
+    -- spi-shift-minus1  = #6.1(spi-shift-bytes) ; do not shift the last 1 bits of the argument                  
+    -- spi-shift-minus2  = #6.2(spi-shift-bytes) ; do not shift the last 2 bits of the argument                  
+    -- spi-shift-minus3  = #6.3(spi-shift-bytes) ; do not shift the last 3 bits of the argument                  
+    -- spi-shift-minus4  = #6.4(spi-shift-bytes) ; do not shift the last 4 bits of the argument                  
+    -- spi-shift-minus5  = #6.5(spi-shift-bytes) ; do not shift the last 5 bits of the argument
+    -- spi-shift-minus6  = #6.6(spi-shift-bytes) ; do not shift the last 6 bits of the argument                  
+    -- spi-shift-minus7  = #6.7(spi-shift-bytes) ; do not shift the last 7 bits of the argument                  
 
-  -- The responses are encoded in a 
-  -- responses = [* response]
-  -- response = spi-shift-bytes    ; response data stream, only for shifts not tagged with #6.9
+    -- spi-shift-cycles  = #6.8(1..65535)  ; returns bstr of (size + 7) / 8
+    -- spi-shift-no-miso = #6.9(spi-shift) ; will not return data
+    -- spi-pause         = #6.10(uint)     ; wait for x bit time
+
+    -- spi-select        = [cs, mode]
+    -- cs                = 0..3
+    -- mode              = 0..3
+    -- spi-unselect      = null
+
+    -- The responses are encoded in a 
+    -- responses = [* response]
+    -- response = spi-shift-bytes    ; response data stream, only for shifts not tagged with #6.9
 
   component controller
     generic(
