@@ -82,11 +82,11 @@ package cbor is
   -- Serializes a map header (if length is passed), or indefinite
   -- (if negative or default). Contents are not handled here.
   function cbor_map_hdr(length: integer := -1) return byte_string;
-  -- Serializes a tag item. Contained item may be concatinated after.
+  -- Serializes a tag item. Contained item may be concatenated after.
   function cbor_tag_hdr(value: natural) return byte_string;
-  -- Serializes a byte string header. Contained bytes may be concatinated after.
+  -- Serializes a byte string header. Contained bytes may be concatenated after.
   function cbor_bstr_hdr(length: natural) return byte_string;
-  -- Serializes a text string header. Contained characters may be concatinated after.
+  -- Serializes a text string header. Contained characters may be concatenated after.
   function cbor_tstr_hdr(length: natural) return byte_string;
   -- Serializes a simple item.
   function cbor_simple(value: natural) return byte_string;
@@ -230,14 +230,6 @@ package body cbor is
                     7 => "000" & data(4 downto 0));
       end if;
     end if;
-
-  -- report "Value of major:         " & integer'image(major) severity note;
-  -- report "Value of kind:          " & kind_t'image(ret.kind) severity note;
-  -- report "Value of argument:      " & integer'image(argument) severity note;
-  -- report "Value of arg_left:      " & integer'image(ret.arg_left) severity note;
-  -- report "Value of arg:           " & nsl_data.text.to_string(ret.arg) severity note;
-  -- report "Value of header_valid:  " & nsl_data.text.to_string(ret.header_valid) severity note;
-  -- report "Value of done:          " & nsl_data.text.to_string(ret.header_valid and ret.arg_left = 0) severity note;
 
    return ret;
   end function;
