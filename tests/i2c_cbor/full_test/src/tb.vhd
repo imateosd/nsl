@@ -28,40 +28,6 @@ architecture arch of tb is
   signal s_resetn_slave4 : std_ulogic;
   
   shared variable cmd_q, rsp_q: nsl_amba.axi4_stream.frame_queue_root_t;
- 
-  type log_color_t is (
-    LOG_COLOR_BLACK,   -- Black   30
-    LOG_COLOR_RED,     -- Red 	  31
-    LOG_COLOR_GREEN,   -- Green   32
-    LOG_COLOR_YELLOW,  -- Yellow  33
-    LOG_COLOR_BLUE,    -- Blue 	  34
-    LOG_COLOR_MAGENTA, -- Magenta 35
-    LOG_COLOR_CYAN,    -- Cyan 	  36
-    LOG_COLOR_WHITE    -- White   37
-    );                 -- Default 39
-
-  procedure log_with_color(level : nsl_simulation.logging.log_level_t; color: log_color_t; message : string) is
-    begin
-      case color is
-        when LOG_COLOR_BLACK =>
-          nsl_simulation.logging.log(level => level, message => character'val(27) & "[30m" & message & character'val(27) & "[0m");
-        when LOG_COLOR_RED =>
-          nsl_simulation.logging.log(level => level, message => character'val(27) & "[31m" & message & character'val(27) & "[0m");
-        when LOG_COLOR_GREEN =>
-          nsl_simulation.logging.log(level => level, message => character'val(27) & "[32m" & message & character'val(27) & "[0m");
-        when LOG_COLOR_YELLOW =>
-          nsl_simulation.logging.log(level => level, message => character'val(27) & "[33m" & message & character'val(27) & "[0m");
-        when LOG_COLOR_BLUE =>
-          nsl_simulation.logging.log(level => level, message => character'val(27) & "[34m" & message & character'val(27) & "[0m");
-        when LOG_COLOR_MAGENTA =>
-          nsl_simulation.logging.log(level => level, message => character'val(27) & "[35m" & message & character'val(27) & "[0m");
-        when LOG_COLOR_CYAN =>
-          nsl_simulation.logging.log(level => level, message => character'val(27) & "[36m" & message & character'val(27) & "[0m");
-        when LOG_COLOR_WHITE =>
-          nsl_simulation.logging.log(level => level, message => character'val(27) & "[37m" & message & character'val(27) & "[0m");
-      end case;
-    end procedure;
-  
   
   -- Operations
   -- Write to 0x50, 0x12 and 0x34          -> [[0x50, h'1234'], null]
@@ -269,97 +235,114 @@ begin
     nsl_amba.axi4_stream.frame_queue_init(cmd_q);
     nsl_amba.axi4_stream.frame_queue_init(rsp_q);
 
-    log_with_color(level => nsl_simulation.logging.LOG_LEVEL_INFO, color => LOG_COLOR_BLUE,
-                   message => "Testing write to clocked slave");
+    nsl_simulation.logging.log(level => nsl_simulation.logging.LOG_LEVEL_INFO,
+                   message => "Testing write to clocked slave", 
+                   color => nsl_simulation.logging.LOG_COLOR_BLUE);
     nsl_amba.axi4_stream.frame_queue_check_io(root_master => cmd_q,
                                               root_slave  => rsp_q,
                                               data1       => nsl_data.bytestream.from_suv(x"8182185043123456"),
                                               data2       => nsl_data.bytestream.from_suv(x"9ff6ff"),
                                               dt          => clock_period,
                                               timeout     => clock_period*2000);
-    log_with_color(level => nsl_simulation.logging.LOG_LEVEL_INFO, color => LOG_COLOR_GREEN,
-                   message => "============================================================= #0 CMD-RSP CHECK PASSED" & LF);
+    nsl_simulation.logging.log(level => nsl_simulation.logging.LOG_LEVEL_INFO,
+                   message => "============================================================= #0 CMD-RSP CHECK PASSED" & LF,
+                   color => nsl_simulation.logging.LOG_COLOR_GREEN);
     
-    log_with_color(level => nsl_simulation.logging.LOG_LEVEL_INFO, color => LOG_COLOR_BLUE,
-                   message => "Testing read from clocked slave");
+    nsl_simulation.logging.log(level => nsl_simulation.logging.LOG_LEVEL_INFO,
+                   message => "Testing read from clocked slave", 
+                   color => nsl_simulation.logging.LOG_COLOR_BLUE);
     nsl_amba.axi4_stream.frame_queue_check_io(root_master => cmd_q,
                                               root_slave  => rsp_q,
                                               data1       => nsl_data.bytestream.from_suv(x"8282185002f6"),
                                               data2       => nsl_data.bytestream.from_suv(x"9f42aaffff"),
                                               dt          => clock_period,
                                               timeout     => clock_period*2000);
-    log_with_color(level => nsl_simulation.logging.LOG_LEVEL_INFO, color => LOG_COLOR_GREEN,
-                   message => "============================================================= #1 CMD-RSP CHECK PASSED" & LF);
+    nsl_simulation.logging.log(level => nsl_simulation.logging.LOG_LEVEL_INFO,
+                   message => "============================================================= #1 CMD-RSP CHECK PASSED" & LF, 
+                   color => nsl_simulation.logging.LOG_COLOR_GREEN);
     
-    log_with_color(level => nsl_simulation.logging.LOG_LEVEL_INFO, color => LOG_COLOR_BLUE,
-                   message => "Testing write to memory");
+    nsl_simulation.logging.log(level => nsl_simulation.logging.LOG_LEVEL_INFO,
+                   message => "Testing write to memory", 
+                   color => nsl_simulation.logging.LOG_COLOR_BLUE);
     nsl_amba.axi4_stream.frame_queue_check_io(root_master => cmd_q,
                                               root_slave  => rsp_q,
                                               data1       => nsl_data.bytestream.from_suv(x"828218404400001234f6"),
                                               data2       => nsl_data.bytestream.from_suv(x"9ff6ff"),
                                               dt          => clock_period,
                                               timeout     => clock_period*2000);
-    log_with_color(level => nsl_simulation.logging.LOG_LEVEL_INFO, color => LOG_COLOR_GREEN,
-                   message => "============================================================= #2 CMD-RSP CHECK PASSED" & LF);
+    nsl_simulation.logging.log(level => nsl_simulation.logging.LOG_LEVEL_INFO,
+                   message => "============================================================= #2 CMD-RSP CHECK PASSED" & LF, 
+                   color => nsl_simulation.logging.LOG_COLOR_GREEN);
     
-    log_with_color(level => nsl_simulation.logging.LOG_LEVEL_INFO, color => LOG_COLOR_BLUE,
-                   message => "Testing read from memory (2x i2c read and write with restart)");
+    nsl_simulation.logging.log(level => nsl_simulation.logging.LOG_LEVEL_INFO,
+                   message => "Testing read from memory (2x i2c read and write with restart)", 
+                   color => nsl_simulation.logging.LOG_COLOR_BLUE);
     nsl_amba.axi4_stream.frame_queue_check_io(root_master => cmd_q,
                                               root_slave  => rsp_q,
                                               data1       => nsl_data.bytestream.from_suv(x"8682184042000082184001f682184042000182184001f6"),
                                               data2       => nsl_data.bytestream.from_suv(x"9ff64112f64134ff"),
                                               dt          => clock_period,
                                               timeout     => clock_period*2000);
-    log_with_color(level => nsl_simulation.logging.LOG_LEVEL_INFO, color => LOG_COLOR_GREEN,
-                   message => "============================================================= #3 CMD-RSP CHECK PASSED" & LF);
+    nsl_simulation.logging.log(level => nsl_simulation.logging.LOG_LEVEL_INFO,
+                   message => "============================================================= #3 CMD-RSP CHECK PASSED" & LF, 
+                   color => nsl_simulation.logging.LOG_COLOR_GREEN);
     
-    log_with_color(level => nsl_simulation.logging.LOG_LEVEL_INFO, color => LOG_COLOR_BLUE,
-                   message => "Testing read from memory (reading 3 bytes from address 0x00)");
+    nsl_simulation.logging.log(level => nsl_simulation.logging.LOG_LEVEL_INFO,
+                   message => "Testing read from memory (reading 3 bytes from address 0x00)", 
+                   color => nsl_simulation.logging.LOG_COLOR_BLUE);
     nsl_amba.axi4_stream.frame_queue_check_io(root_master => cmd_q,
                                               root_slave  => rsp_q,
                                               data1       => nsl_data.bytestream.from_suv(x"8382184042000082184003f6"),
                                               data2       => nsl_data.bytestream.from_suv(x"9ff64312ffffff"),
                                               dt          => clock_period,
                                               timeout     => clock_period*2000);
-    log_with_color(level => nsl_simulation.logging.LOG_LEVEL_INFO, color => LOG_COLOR_GREEN,
-                   message => "============================================================= #4 CMD-RSP CHECK PASSED" & LF);
+    nsl_simulation.logging.log(level => nsl_simulation.logging.LOG_LEVEL_INFO,
+                   message => "============================================================= #4 CMD-RSP CHECK PASSED" & LF, 
+                   color => nsl_simulation.logging.LOG_COLOR_GREEN);
     
-    log_with_color(level => nsl_simulation.logging.LOG_LEVEL_INFO, color => LOG_COLOR_BLUE,
-                   message => "Testing access to non existant address");
+    nsl_simulation.logging.log(level => nsl_simulation.logging.LOG_LEVEL_INFO,
+                   message => "Testing access to non existant address", 
+                   color => nsl_simulation.logging.LOG_COLOR_BLUE);
     nsl_amba.axi4_stream.frame_queue_check_io(root_master => cmd_q,
                                               root_slave  => rsp_q,
                                               data1       => nsl_data.bytestream.from_suv(x"828218604112f6"),
                                               data2       => nsl_data.bytestream.from_suv(x"9ff4ff"),
                                               dt          => clock_period,
                                               timeout     => clock_period*2000);
-    log_with_color(level => nsl_simulation.logging.LOG_LEVEL_INFO, color => LOG_COLOR_GREEN,
-                   message => "============================================================= #5 CMD-RSP CHECK PASSED" & LF);
+    nsl_simulation.logging.log(level => nsl_simulation.logging.LOG_LEVEL_INFO,
+                   message => "============================================================= #5 CMD-RSP CHECK PASSED" & LF, 
+                   color => nsl_simulation.logging.LOG_COLOR_GREEN);
     
-    log_with_color(level => nsl_simulation.logging.LOG_LEVEL_INFO, color => LOG_COLOR_BLUE,
-                   message => "Testing NACK for data bytes");
+    nsl_simulation.logging.log(level => nsl_simulation.logging.LOG_LEVEL_INFO,
+                   message => "Testing NACK for data bytes", 
+                   color => nsl_simulation.logging.LOG_COLOR_BLUE);
     nsl_amba.axi4_stream.frame_queue_check_io(root_master => cmd_q,
                                               root_slave  => rsp_q,
                                               data1       => nsl_data.bytestream.from_suv(x"82821830421234f6"),
                                               data2       => nsl_data.bytestream.from_suv(x"9fc200ff"),
                                               dt          => clock_period,
                                               timeout     => clock_period*2000);
-    log_with_color(level => nsl_simulation.logging.LOG_LEVEL_INFO, color => LOG_COLOR_GREEN,
-                   message => "============================================================= #6 CMD-RSP CHECK PASSED" & LF); 
+    nsl_simulation.logging.log(level => nsl_simulation.logging.LOG_LEVEL_INFO,
+                   message => "============================================================= #6 CMD-RSP CHECK PASSED" & LF,
+                   color => nsl_simulation.logging.LOG_COLOR_GREEN); 
 
-    log_with_color(level => nsl_simulation.logging.LOG_LEVEL_INFO, color => LOG_COLOR_BLUE,
-                   message => "Testing poll-read for a non-existant slave");
+    nsl_simulation.logging.log(level => nsl_simulation.logging.LOG_LEVEL_INFO,
+                   message => "Testing poll-read for a non-existant slave", 
+                   color => nsl_simulation.logging.LOG_COLOR_BLUE);
     nsl_amba.axi4_stream.frame_queue_check_io(root_master => cmd_q,
                                               root_slave  => rsp_q,
                                               data1       => nsl_data.bytestream.from_suv(x"82c1830a187002f6"),
                                               data2       => nsl_data.bytestream.from_suv(x"9ff4ff"),
                                               dt          => clock_period,
                                               timeout     => clock_period*2000);
-    log_with_color(level => nsl_simulation.logging.LOG_LEVEL_INFO, color => LOG_COLOR_GREEN,
-                   message => "============================================================= #7 CMD-RSP CHECK PASSED" & LF); 
+    nsl_simulation.logging.log(level => nsl_simulation.logging.LOG_LEVEL_INFO,
+                   message => "============================================================= #7 CMD-RSP CHECK PASSED" & LF,
+                   color => nsl_simulation.logging.LOG_COLOR_GREEN); 
 
 
-    log_with_color(level => nsl_simulation.logging.LOG_LEVEL_INFO, color => LOG_COLOR_BLUE,
-                   message => "Testing poll-read for a slave that will be enabled in 5 us (timeout set to 10 us)");
+    nsl_simulation.logging.log(level => nsl_simulation.logging.LOG_LEVEL_INFO,
+                   message => "Testing poll-read for a slave that will be enabled in 5 us (timeout set to 10 us)", 
+                   color => nsl_simulation.logging.LOG_COLOR_BLUE);
     s_enable_slave4 <= '1';
     nsl_amba.axi4_stream.frame_queue_check_io(root_master => cmd_q,
                                               root_slave  => rsp_q,
@@ -367,8 +350,9 @@ begin
                                               data2       => nsl_data.bytestream.from_suv(x"9f41bbff"),
                                               dt          => clock_period,
                                               timeout     => clock_period*2000);
-    log_with_color(level => nsl_simulation.logging.LOG_LEVEL_INFO, color => LOG_COLOR_GREEN,
-                   message => "============================================================= #8 CMD-RSP CHECK PASSED" & LF); 
+    nsl_simulation.logging.log(level => nsl_simulation.logging.LOG_LEVEL_INFO,
+                   message => "============================================================= #8 CMD-RSP CHECK PASSED" & LF,
+                   color => nsl_simulation.logging.LOG_COLOR_GREEN); 
   
     wait for 1000 ns;
 
@@ -379,7 +363,9 @@ begin
   begin
     -- Let FSM reach IDLE and queues be initialized
     wait for 70 ns;
-    log_with_color(level => nsl_simulation.logging.LOG_LEVEL_INFO, color => LOG_COLOR_MAGENTA, message => "Going to run frame_queue_master");
+    nsl_simulation.logging.log(level => nsl_simulation.logging.LOG_LEVEL_INFO,
+                               message => "Going to run frame_queue_master", 
+                               color => nsl_simulation.logging.LOG_COLOR_MAGENTA);
     nsl_amba.axi4_stream.frame_queue_master(cfg => cfg_c, root => cmd_q, clock => s_clk,
                                             stream_i => s_cmd.s, stream_o => s_cmd.m, dt => clock_period);    
   end process;
@@ -388,7 +374,9 @@ begin
   begin
     -- Let FSM reach IDLE and queues be initialized
     wait for 70 ns;
-    log_with_color(level => nsl_simulation.logging.LOG_LEVEL_INFO, color => LOG_COLOR_YELLOW, message => "Going to run frame_queue_slave");
+    nsl_simulation.logging.log(level => nsl_simulation.logging.LOG_LEVEL_INFO,
+                               message => "Going to run frame_queue_slave", 
+                               color => nsl_simulation.logging.LOG_COLOR_YELLOW);
     nsl_amba.axi4_stream.frame_queue_slave(cfg => cfg_c, root => rsp_q, clock => s_clk,
                                            stream_i => s_rsp.m, stream_o => s_rsp.s, dt => clock_period);   
   end process;
