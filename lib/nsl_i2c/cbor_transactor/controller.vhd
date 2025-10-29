@@ -45,6 +45,9 @@ architecture beh of controller is
                                   -- ARRAY_GET_FIRST (via RSP_BREAK_PUT), otherwise go to CMD_GET_FIRST
                                   -- if the number of commands is completer, send break for indefine array 
 
+        ST_POLL_ARRAY_GET,        -- enters the array with the parameters for poll-read
+        ST_TIMEOUT_GET,           -- gets timeout value (in clock cycles)
+        
         ST_ADDR_GET,              -- get address (type and complete ai)
         ST_ADDR_SET,              -- store address, reset parser and go to next
 
@@ -96,8 +99,8 @@ architecture beh of controller is
         owned         : std_ulogic;
         addr          : std_ulogic_vector(9 downto 0);
         data          : std_ulogic_vector(7 downto 0);
-        word_count    : natural range 0 to 63;
-        word_total    : natural range 0 to 63;
+        word_count    : unsigned(0 to 63);
+        word_total    : unsigned(0 to 63);
         command_count : unsigned(31 downto 0); -- this could be up to 63 downto 0
         divisor       : unsigned(5 downto 0);
         parser        : nsl_data.cbor.parser_t;
@@ -107,6 +110,7 @@ architecture beh of controller is
         encoded_len   : natural range 0 to 8;
         encoded_i     : natural range 0 to 8;
         cmd_cancelled : boolean;
+        timeout       : integer;
     end record;
 
     signal r, rin : regs_t;
@@ -120,7 +124,8 @@ architecture beh of controller is
     signal shift_w_valid_o, shift_w_ready_i : std_ulogic;
     signal shift_r_valid_i, shift_r_ready_o : std_ulogic;
     signal shift_w_data_o, shift_r_data_i : std_ulogic_vector(7 downto 0);
-   
+
+    signal clr_timeout_cnt_s : std_ulogic := '0';
     
     constant c_print_logs : boolean := false;
 
@@ -294,6 +299,11 @@ begin
     begin
       if rising_edge(clock_i) then
         r <= rin;
+        if clr_timeout_cnt_s = '1' then
+          r.timeout <= 0;
+        elsif r.timeout /= 0 then
+          r.timeout <= r.timeout - 1;
+        end if;
         if rin.state = r.state then
         else
           log_state_change(r => r, rin => rin);
@@ -301,6 +311,7 @@ begin
       end if;
       if reset_n_i = '0' then
         r.state <= ST_RESET;
+        r.timeout <= 0;
       end if;
     end process;
 
@@ -325,7 +336,8 @@ begin
           rin.divisor       <= (others => '1');
           rin.state         <= ST_ARRAY_GET;
           rin.parser        <= nsl_data.cbor.reset;
-          rin.word_count    <= 0;
+          rin.word_count    <= (others => '0');
+          rin.word_total    <= (others => '0');
           rin.command_count <= (others => '0');
           rin.addr          <= (others => '0');
           rin.data          <= (others => '-');
@@ -334,6 +346,8 @@ begin
           rin.encoded_len   <= 0;
           rin.encoded_i     <= 0;
           rin.cmd_cancelled <= false;
+          rin.timeout       <= 0;
+          clr_timeout_cnt_s <= '0';
 
         when ST_ARRAY_GET =>
             if cmd_i.valid = '1' then
@@ -378,6 +392,8 @@ begin
               rin.state  <= ST_RSP_BREAK_PREP;
             else 
             end if;
+          elsif nsl_data.cbor.kind(r.parser) = KIND_TAG and nsl_data.cbor.arg_int(r.parser) = 1 then
+            rin.state <= ST_POLL_ARRAY_GET;
           else
             rin.state <= ST_RSP_BREAK_PREP;
           end if;
@@ -417,13 +433,13 @@ begin
           if nsl_data.cbor.kind(r.parser) = KIND_POSITIVE then
             -- READ OPERATION
             rin.addr <= r.addr(8 downto 0) & '1';
-            rin.word_count <= to_integer(nsl_data.cbor.arg(r.parser, 64));
-            rin.word_total <= to_integer(nsl_data.cbor.arg(r.parser, 64));
+            rin.word_count <= nsl_data.cbor.arg(r.parser, 64);
+            rin.word_total <= nsl_data.cbor.arg(r.parser, 64);
           elsif nsl_data.cbor.kind(r.parser) = KIND_BSTR then
             -- WRITE OPERATION
             rin.addr <= r.addr(8 downto 0) & '0';
-            rin.word_count <= to_integer(nsl_data.cbor.arg(r.parser, 64));
-            rin.word_total <= to_integer(nsl_data.cbor.arg(r.parser, 64));
+            rin.word_count <= nsl_data.cbor.arg(r.parser, 64);
+            rin.word_total <= nsl_data.cbor.arg(r.parser, 64);
           else
             -- rin.state <= ST_START;
           end if;
@@ -458,6 +474,7 @@ begin
             rin.data <= (0 => not shift_r_data_i(0), others => '0');
             if shift_r_data_i(0) = '0' then -- ACK OK
               if r.addr(0) = '1' then
+                clr_timeout_cnt_s <= '1';
                 rin.state <= ST_RSP_BSTR_HDR_PREP;  -- before going to
                                                     -- ST_READ_RUN, write the
                                                     -- bstr header to hold the
@@ -465,13 +482,18 @@ begin
               else
                 rin.state <= ST_WRITE_GET;
               end if;
-            else
-              rin.cmd_cancelled <= true;
-              rin.state <= ST_RSP_ANACK_PREP;
+            else -- NACK
+              if r.timeout = 0 then
+                rin.cmd_cancelled <= true;
+                rin.state <= ST_RSP_ANACK_PREP;
+              else
+                rin.state <= ST_STOP;
+              end if;
             end if;
           end if;
         
         when ST_READ_RUN =>
+          clr_timeout_cnt_s <= '0';
           if clocker_ready_i = '1' then
             rin.state <= ST_READ_DATA;
           end if;
@@ -486,7 +508,7 @@ begin
           if shift_w_ready_i = '1' then
             rin.word_count <= (r.word_count - 1) mod 64;
             rin.state <= ST_READ_PUT;
-            -- rin.last <= (r.word_count - 1) mod 64 = 0;
+            -- rin.last <= (r.word_count - 1) = 0;
           end if;
        
         when ST_READ_PUT =>
@@ -550,6 +572,31 @@ begin
             end if;
           -- end if;
 
+        when ST_POLL_ARRAY_GET =>
+          if not nsl_data.cbor.is_done(r.parser) then
+            if cmd_i.valid = '1' then
+              rin.parser <= nsl_data.cbor.feed(r.parser, cmd_i.data(0));
+            end if;
+          else
+            if nsl_data.cbor.kind(r.parser) = nsl_data.cbor.KIND_ARRAY then
+              rin.parser   <= nsl_data.cbor.reset;
+              rin.state    <= ST_TIMEOUT_GET;
+            end if;
+          end if;
+
+        when ST_TIMEOUT_GET =>
+          if not nsl_data.cbor.is_done(r.parser) then
+            if cmd_i.valid = '1' then
+              rin.parser <= nsl_data.cbor.feed(r.parser, cmd_i.data(0));
+            end if;
+          else
+            rin.timeout  <= integer( nsl_data.cbor.arg_int(r.parser) * system_clock_c / 1000000 );
+            nsl_simulation.logging.log_info("arg is " & nsl_data.text.to_string(nsl_data.cbor.arg_int(r.parser)) );
+            nsl_simulation.logging.log_info("Setting r.timeout to " & nsl_data.text.to_string(integer( nsl_data.cbor.arg_int(r.parser) * system_clock_c / 1000000)));
+            rin.parser   <= nsl_data.cbor.reset;
+            rin.state    <= ST_ADDR_GET;
+          end if;
+            
         when ST_CMD_END =>
           if not r.indefinite and r.command_count = 0 then
             rin.state <= ST_RSP_BREAK_PREP;
@@ -579,7 +626,11 @@ begin
 
         when ST_STOP_WAIT => -- TODO probably I can remove it
         if clocker_ready_i = '1' then
-          rin.state <= ST_CMD_END;
+          if r.timeout = 0 then
+            rin.state <= ST_CMD_END;
+          else
+            rin.state <= ST_START;
+          end if;
         end if;
 
         when ST_RSP_OK_PREP =>
@@ -607,7 +658,7 @@ begin
           end if;
         
         when ST_RSP_DNACK_PREP =>
-          nsl_data.bytestream.write(s => cbr_encoded, d => nsl_data.cbor.cbor_tagged(tag => 2, item => nsl_data.cbor.cbor_positive(value => to_integer(to_unsigned(r.word_total - r.word_count - 1, 6))) ) );
+          nsl_data.bytestream.write(s => cbr_encoded, d => nsl_data.cbor.cbor_tagged(tag => 2, item => nsl_data.cbor.cbor_positive(value => to_integer(r.word_total - r.word_count - 1) ))  );
           nsl_simulation.logging.log_info("cbr_encoded " & nsl_data.text.to_string(cbr_encoded.all) );
 
           rin.encoded_len <= cbr_encoded.all'length;
@@ -624,7 +675,7 @@ begin
               rin.encoded_len <= 0;
               rin.encoded_i <= 0;
             else
-              rin.encoded_i <= (r.encoded_i + 1) mod 9;
+              rin.encoded_i <= (r.encoded_i + 1);
             end if;
           end if;
 
@@ -643,12 +694,12 @@ begin
               rin.encoded_len <= 0;
               rin.encoded_i <= 0;
             else
-              rin.encoded_i <= (r.encoded_i + 1) mod 9;
+              rin.encoded_i <= (r.encoded_i + 1);
             end if;
           end if;
 
       when ST_RSP_BSTR_HDR_PREP =>
-          nsl_data.bytestream.write(s => cbr_encoded, d => nsl_data.cbor.cbor_bstr_hdr(length => to_integer(to_unsigned(r.word_count, 6))));
+          nsl_data.bytestream.write(s => cbr_encoded, d => nsl_data.cbor.cbor_bstr_hdr(length => to_integer(r.word_count)));
           rin.encoded_len <= cbr_encoded.all'length;
           rin.encoded(cbr_encoded.all'length-1 downto 0) <= cbr_encoded.all;
           nsl_data.bytestream.clear(s => cbr_encoded);
@@ -661,7 +712,7 @@ begin
               rin.encoded_len <= 0;
               rin.encoded_i <= 0;
             else
-              rin.encoded_i <= (r.encoded_i + 1) mod 9;
+              rin.encoded_i <= (r.encoded_i + 1);
             end if;
           end if;
           
@@ -703,6 +754,11 @@ begin
 
         when ST_ARRAY_GET | ST_CMD_GET | ST_ADDR_GET | ST_OP_GET  =>
           cmd_o.ready <= '1';
+
+        when ST_POLL_ARRAY_GET | ST_TIMEOUT_GET =>
+          if not nsl_data.cbor.is_done(r.parser) then
+            cmd_o.ready <= '1';
+          end if;
 
         when ST_WRITE_GET =>
           cmd_o.ready <= '1';
