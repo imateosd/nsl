@@ -85,7 +85,6 @@ architecture rtl of controller is
     encoded             : nsl_data.bytestream.byte_string(8 downto 0);
     encoded_len         : natural range 0 to 8;
     encoded_i           : natural range 0 to 8;
-    cmd_cancelled       : boolean;
     inside_cmd          : boolean;
   end record;
 
@@ -145,11 +144,8 @@ begin
 
       when ST_CMD_GET =>
           if cmd_i.valid = '1' then
-            nsl_simulation.logging.log_info("In ST_CMD_GET, parsing a byte");
-            nsl_simulation.logging.log_info("cmd_i.data(0) " & nsl_data.text.to_hex_string(cmd_i.data(0)));
             rin.parser <= nsl_data.cbor.feed(r.parser, cmd_i.data(0));
             if nsl_data.cbor.is_last( r.parser, cmd_i.data(0) ) then
-              rin.cmd_cancelled <= false;
               rin.state <= ST_CMD_EXEC;
               if not r.indefinite and not r.inside_cmd then
                 rin.command_count <= (r.command_count - 1) mod 32;
