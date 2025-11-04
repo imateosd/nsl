@@ -103,54 +103,35 @@ architecture rtl of controller is
     return result;
   end;
 
-  procedure log_state_change(r : regs_t; rin: regs_t) is
-    constant string_len : integer := 20;
-    variable c_state, n_state : string (1 to string_len);
+  function state_to_string(s : state_t) return string is
   begin
-    case r.state is
-      when ST_RESET => c_state              := to_fixed("ST_RESET", string_len);
-      when ST_ARRAY_GET => c_state          := to_fixed("ST_ARRAY_GET", string_len);
-      when ST_ARRAY_ENTER => c_state        := to_fixed("ST_ARRAY_ENTER", string_len);
-      when ST_CMD_GET => c_state            := to_fixed("ST_CMD_GET", string_len);
-      when ST_CMD_EXEC => c_state           := to_fixed("ST_CMD_EXEC", string_len);
-      when ST_CMD_END => c_state            := to_fixed("ST_CMD_END", string_len);
-      when ST_DATA_GET => c_state           := to_fixed("ST_DATA_GET", string_len);
-      when ST_DATA_RUN => c_state           := to_fixed("ST_DATA_RUN", string_len);
-      when ST_DATA_PUT => c_state           := to_fixed("ST_DATA_PUT", string_len);
-      when ST_RSP_ARRAY_HDR_PREP => c_state := to_fixed("ST_RSP_ARRAY_HDR_PREP", string_len);
-      when ST_RSP_ARRAY_HDR_PUT => c_state  := to_fixed("ST_RSP_ARRAY_HDR_PUT", string_len);
-      when ST_RSP_BSTR_HDR_PREP => c_state  := to_fixed("ST_RSP_BSTR_HDR_PREP", string_len);
-      when ST_RSP_BSTR_HDR_PUT => c_state   := to_fixed("ST_RSP_BSTR_HDR_PUT", string_len);
-      when ST_RSP_BREAK_PREP => c_state     := to_fixed("ST_RSP_BREAK_PREP", string_len);
-      when ST_RSP_BREAK_PUT => c_state      := to_fixed("ST_RSP_BREAK_PUT", string_len);
-      when ST_ATE_RUN => c_state            := to_fixed("ST_ATE_RUN", string_len);
-      when ST_ATE_WAIT_FOR_DONE => c_state           := to_fixed("ST_ATE_WAIT_FOR_DONE", string_len);
-      when ST_DATA_GET_RSP => c_state           := to_fixed("ST_DATA_GET_RSP", string_len);
-      when others => c_state                := to_fixed("UNKNOWN", string_len);
+    case s is
+      when ST_RESET              => return "ST_RESET";
+      when ST_ARRAY_GET          => return "ST_ARRAY_GET";
+      when ST_ARRAY_ENTER        => return "ST_ARRAY_ENTER";
+      when ST_CMD_GET            => return "ST_CMD_GET";
+      when ST_CMD_EXEC           => return "ST_CMD_EXEC";
+      when ST_CMD_END            => return "ST_CMD_END";
+      when ST_DATA_GET           => return "ST_DATA_GET";
+      when ST_DATA_RUN           => return "ST_DATA_RUN";
+      when ST_DATA_PUT           => return "ST_DATA_PUT";
+      when ST_RSP_ARRAY_HDR_PREP => return "ST_RSP_ARRAY_HDR_PREP";
+      when ST_RSP_ARRAY_HDR_PUT  => return "ST_RSP_ARRAY_HDR_PUT";
+      when ST_RSP_BSTR_HDR_PREP  => return "ST_RSP_BSTR_HDR_PREP";
+      when ST_RSP_BSTR_HDR_PUT   => return "ST_RSP_BSTR_HDR_PUT";
+      when ST_RSP_BREAK_PREP     => return "ST_RSP_BREAK_PREP";
+      when ST_RSP_BREAK_PUT      => return "ST_RSP_BREAK_PUT";
+      when ST_ATE_RUN            => return "ST_ATE_RUN";
+      when ST_ATE_WAIT_FOR_DONE  => return "ST_ATE_WAIT_FOR_DONE";
+      when ST_DATA_GET_RSP       => return "ST_DATA_GET_RSP";
+      when others                => return "UNKNOWN";
     end case;
-    case rin.state is
-      when ST_RESET => n_state              := to_fixed("ST_RESET", string_len);
-      when ST_ARRAY_GET => n_state          := to_fixed("ST_ARRAY_GET", string_len);
-      when ST_ARRAY_ENTER => n_state        := to_fixed("ST_ARRAY_ENTER", string_len);
-      when ST_CMD_GET => n_state            := to_fixed("ST_CMD_GET", string_len);
-      when ST_CMD_EXEC => n_state           := to_fixed("ST_CMD_EXEC", string_len);
-      when ST_CMD_END => n_state            := to_fixed("ST_CMD_END", string_len);
-      when ST_DATA_GET => n_state           := to_fixed("ST_DATA_GET", string_len);
-      when ST_DATA_RUN => n_state           := to_fixed("ST_DATA_RUN", string_len);
-      when ST_DATA_PUT => n_state           := to_fixed("ST_DATA_PUT", string_len);
-      when ST_RSP_ARRAY_HDR_PREP => n_state := to_fixed("ST_RSP_ARRAY_HDR_PREP", string_len);
-      when ST_RSP_ARRAY_HDR_PUT => n_state  := to_fixed("ST_RSP_ARRAY_HDR_PUT", string_len);
-      when ST_RSP_BSTR_HDR_PREP => n_state  := to_fixed("ST_RSP_BSTR_HDR_PREP", string_len);
-      when ST_RSP_BSTR_HDR_PUT => n_state   := to_fixed("ST_RSP_BSTR_HDR_PUT", string_len);
-      when ST_RSP_BREAK_PREP => n_state     := to_fixed("ST_RSP_BREAK_PREP", string_len);
-      when ST_RSP_BREAK_PUT => n_state      := to_fixed("ST_RSP_BREAK_PUT", string_len);
-      when ST_ATE_RUN => n_state            := to_fixed("ST_ATE_RUN", string_len);
-      when ST_ATE_WAIT_FOR_DONE => n_state           := to_fixed("ST_ATE_WAIT_FOR_DONE", string_len);
-      when ST_DATA_GET_RSP => n_state           := to_fixed("ST_DATA_GET_RSP", string_len);
-      when others => n_state                := to_fixed("UNKNOWN", string_len);
-    end case;
+  end;
+    
+  
+  procedure log_state_change(r : regs_t; rin: regs_t) is  begin
     if c_print_logs then
-      nsl_simulation.logging.log_info("In " & c_state & " => " & n_state & character'val(10));
+      nsl_simulation.logging.log_info("In " & state_to_string(r.state) & " => " & state_to_string(rin.state) & LF );
     end if;
   end procedure;
 
@@ -244,7 +225,7 @@ begin
         if nsl_data.cbor.kind(r.parser) = nsl_data.cbor.KIND_TAG then
           rin.tag <= nsl_data.cbor.arg_int(r.parser);
           if nsl_data.cbor.arg_int(r.parser) > 0 and nsl_data.cbor.arg_int(r.parser) < 8 then
-            rin.bit_count  <= data_max_size - 1 - nsl_data.cbor.arg_int(r.parser);
+            rin.bit_count  <= data_max_size - nsl_data.cbor.arg_int(r.parser);
             rin.inside_cmd <= true;
             rin.state      <= ST_CMD_GET; -- going to get the bstr header
           elsif nsl_data.cbor.arg_int(r.parser) = 8 then -- SHIFT with no TDI
@@ -273,13 +254,13 @@ begin
             rin.cmd_pending <= nsl_jtag.ate.ATE_OP_RTI;
             rin.state       <= ST_ATE_RUN;
           elsif r.tag > 0 and r.tag < 8 then
-            nsl_simulation.logging.log_info("Running ATE_OP_SHIFT with no TDI for n bytes = " & nsl_data.text.to_string(nsl_data.cbor.arg(r.parser, 64)));
+            nsl_simulation.logging.log_info("Running ATE_OP_SHIFT for n bytes = " & nsl_data.text.to_string(nsl_data.cbor.arg(r.parser, 64)));
             rin.word_count  <= nsl_data.cbor.arg(r.parser, 64);
             rin.cmd_pending <= nsl_jtag.ate.ATE_OP_SHIFT;
             rin.state     <= ST_RSP_BSTR_HDR_PREP;
           elsif r.tag = 8 then
-            nsl_simulation.logging.log_info("Running ATE_OP_SHIFT with no TDI for n bytes = " & nsl_data.text.to_string(nsl_data.cbor.arg(r.parser, 64)));
-            rin.word_count  <= nsl_data.cbor.arg(r.parser, 64);
+            nsl_simulation.logging.log_info("Running ATE_OP_SHIFT with no TDI for n bytes = " & nsl_data.text.to_string(nsl_data.cbor.arg(r.parser, 64)/8));
+            rin.word_count  <= to_unsigned(nsl_data.cbor.arg_int(r.parser)/8, 64);
             rin.cmd_pending <= nsl_jtag.ate.ATE_OP_SHIFT;
             rin.state     <= ST_RSP_BSTR_HDR_PREP;
           elsif r.tag = 10 then
@@ -370,7 +351,8 @@ begin
 
         if r.has_tdi then
           if cmd_i.valid = '1' then
-            rin.cmd_data <= cmd_i.data(0);            rin.word_count <= (r.word_count - 1) mod 64;
+            rin.cmd_data <= cmd_i.data(0);
+            rin.word_count <= (r.word_count - 1) mod 64;
             rin.state <= ST_DATA_RUN;
           end if;
         else

@@ -38,39 +38,6 @@ architecture arch of tb is
 
 
   shared variable cmd_q, rsp_q: nsl_amba.axi4_stream.frame_queue_root_t;
- 
- -- type log_color_t is (
-  --   LOG_COLOR_BLACK,   -- Black 	30
-  --   LOG_COLOR_RED,     -- Red 	  31
-  --   LOG_COLOR_GREEN,   -- Green 	32
-  --   LOG_COLOR_YELLOW,  -- Yellow 	33
-  --   LOG_COLOR_BLUE,    -- Blue 	  34
-  --   LOG_COLOR_MAGENTA, -- Magenta 35
-  --   LOG_COLOR_CYAN,    -- Cyan 	  36
-  --   LOG_COLOR_WHITE    -- White 	37
-  --   );                 -- Default 39
-
-  procedure log_with_color(level : nsl_simulation.logging.log_level_t; color: nsl_simulation.logging.log_color_t; message : string) is
-    begin
-      case color is
-        when nsl_simulation.logging.LOG_COLOR_BLACK =>
-          nsl_simulation.logging.log(level => level, message => character'val(27) & "[30m" & message & character'val(27) & "[0m");
-        when nsl_simulation.logging.LOG_COLOR_RED =>
-          nsl_simulation.logging.log(level => level, message => character'val(27) & "[31m" & message & character'val(27) & "[0m");
-        when nsl_simulation.logging.LOG_COLOR_GREEN =>
-          nsl_simulation.logging.log(level => level, message => character'val(27) & "[32m" & message & character'val(27) & "[0m");
-        when nsl_simulation.logging.LOG_COLOR_YELLOW =>
-          nsl_simulation.logging.log(level => level, message => character'val(27) & "[33m" & message & character'val(27) & "[0m");
-        when nsl_simulation.logging.LOG_COLOR_BLUE =>
-          nsl_simulation.logging.log(level => level, message => character'val(27) & "[34m" & message & character'val(27) & "[0m");
-        when nsl_simulation.logging.LOG_COLOR_MAGENTA =>
-          nsl_simulation.logging.log(level => level, message => character'val(27) & "[35m" & message & character'val(27) & "[0m");
-        when nsl_simulation.logging.LOG_COLOR_CYAN =>
-          nsl_simulation.logging.log(level => level, message => character'val(27) & "[36m" & message & character'val(27) & "[0m");
-        when nsl_simulation.logging.LOG_COLOR_WHITE =>
-          nsl_simulation.logging.log(level => level, message => character'val(27) & "[37m" & message & character'val(27) & "[0m");
-      end case;
-    end procedure;
   
 begin
 
@@ -195,22 +162,45 @@ begin
  
   stim: process
   begin
-    -- Let FSM reach IDLE
-    wait for 50 ns;
 
     nsl_amba.axi4_stream.frame_queue_init(cmd_q);
     nsl_amba.axi4_stream.frame_queue_init(rsp_q);
+    
+    -- Let FSM reach IDLE
+    wait for 50 ns;
 
-    log_with_color(level => nsl_simulation.logging.LOG_LEVEL_INFO, color => nsl_simulation.logging.LOG_COLOR_BLUE, message => "Testing IDCODE read");
+    nsl_simulation.logging.log(level => nsl_simulation.logging.LOG_LEVEL_INFO,
+                               message => "Testing IDCODE read", color => nsl_simulation.logging.LOG_COLOR_BLUE);
     nsl_amba.axi4_stream.frame_queue_check_io(root_master => cmd_q,
                                               root_slave  => rsp_q,
-                                              data1 => nsl_data.bytestream.from_suv(x"87ca0602e2c9411103e1c804"),
+                                              data1 => nsl_data.bytestream.from_suv(x"87ca0602e2c9411103e1c81820"),
                                               data2 => nsl_data.bytestream.from_suv(x"9f4421436587ff"),
                                               dt      => clock_period,
                                               timeout => clock_period*2000000);
-    log_with_color(level => nsl_simulation.logging.LOG_LEVEL_INFO, color => nsl_simulation.logging.LOG_COLOR_GREEN, message => "==================================================================================== #0 IDCODE READ PASSED" & character'val(10));
+    nsl_simulation.logging.log(level => nsl_simulation.logging.LOG_LEVEL_INFO,
+                               message => "=============================== #0 IDCODE READ PASSED" & LF, color => nsl_simulation.logging.LOG_COLOR_GREEN);
 
-    -- log_with_color(level => nsl_simulation.logging.LOG_LEVEL_INFO, color => nsl_simulation.logging.LOG_COLOR_BLUE, message => "Testing Chain enum");
+    nsl_simulation.logging.log(level => nsl_simulation.logging.LOG_LEVEL_INFO, message => "Testing minus with no TDI", color => nsl_simulation.logging.LOG_COLOR_BLUE);
+    nsl_amba.axi4_stream.frame_queue_check_io(root_master => cmd_q,
+                                              root_slave  => rsp_q,
+                                              data1 => nsl_data.bytestream.from_suv(x"87ca0602e2c9411103e1c3c81820"),
+                                              data2 => nsl_data.bytestream.from_suv(x"9f4421436507ff"),
+                                              dt      => clock_period,
+                                              timeout => clock_period*2000000);
+    nsl_simulation.logging.log(level => nsl_simulation.logging.LOG_LEVEL_INFO,
+                               message => "============================== #1 Minus with no TDI run correctly" & LF, color => nsl_simulation.logging.LOG_COLOR_GREEN);
+
+    nsl_simulation.logging.log(level => nsl_simulation.logging.LOG_LEVEL_INFO, message => "Testing minus with no TDO", color => nsl_simulation.logging.LOG_COLOR_BLUE);
+    nsl_amba.axi4_stream.frame_queue_check_io(root_master => cmd_q,
+                                              root_slave  => rsp_q,
+                                              data1 => nsl_data.bytestream.from_suv(x"87ca0602e2c3c9411103e1c81820"),
+                                              data2 => nsl_data.bytestream.from_hex("9f44--------ff"),
+                                              dt      => clock_period,
+                                              timeout => clock_period*2000000);
+    nsl_simulation.logging.log(level => nsl_simulation.logging.LOG_LEVEL_INFO,
+                               message => "============================== #2  Minus with no TDO run correctly" & LF, color => nsl_simulation.logging.LOG_COLOR_GREEN);
+
+    -- nsl_simulation.logging.log(level => nsl_simulation.logging.LOG_LEVEL_INFO, message => "Testing Chain enum", color => nsl_simulation.logging.LOG_COLOR_BLUE);
     -- nsl_amba.axi4_stream.frame_queue_check_io(root_master => cmd_q,
     --                                           root_slave  => rsp_q,
     --                                           data1 => nsl_data.bytestream.from_suv(x"8ae3ca183201e1440355ffc0c8190200e2440355ffc0c819020001"),
@@ -218,7 +208,7 @@ begin
     --                                           data2 => nsl_data.bytestream.from_suv(x"9f4400000000ff"),
     --                                          dt      => clock_period,
     --                                           timeout => clock_period*2000000);
-    -- log_with_color(level => nsl_simulation.logging.LOG_LEVEL_INFO, color => nsl_simulation.logging.LOG_COLOR_GREEN, message => "==================================================================================== #1 CMD-RSP CHECK PASSED" & character'val(10));    
+    -- nsl_simulation.logging.log(level => nsl_simulation.logging.LOG_LEVEL_INFO, message => "==================================================================================== #1 CMD-RSP CHECK PASSED" & LF, color => nsl_simulation.logging.LOG_COLOR_GREEN);
 
     -- wait for 1000 ns;                  
 
@@ -229,7 +219,7 @@ begin
   begin
     -- Let FSM reach IDLE and queues be initialized
     wait for 70 ns;
-    log_with_color(level => nsl_simulation.logging.LOG_LEVEL_INFO, color => nsl_simulation.logging.LOG_COLOR_MAGENTA, message => "Going to run frame_queue_master");
+    nsl_simulation.logging.log(level => nsl_simulation.logging.LOG_LEVEL_INFO, message => "Going to run frame_queue_master", color => nsl_simulation.logging.LOG_COLOR_MAGENTA);
     nsl_amba.axi4_stream.frame_queue_master(cfg => cfg_c, root => cmd_q, clock => s_clk,
                                             stream_i => s_cmd.s, stream_o => s_cmd.m, dt => clock_period);    
   end process;
@@ -238,7 +228,7 @@ begin
   begin
     -- Let FSM reach IDLE and queues be initialized
     wait for 70 ns;
-    log_with_color(level => nsl_simulation.logging.LOG_LEVEL_INFO, color => nsl_simulation.logging.LOG_COLOR_YELLOW, message => "Going to run frame_queue_slave");
+    nsl_simulation.logging.log(level => nsl_simulation.logging.LOG_LEVEL_INFO, message => "Going to run frame_queue_slave", color => nsl_simulation.logging.LOG_COLOR_YELLOW);
     nsl_amba.axi4_stream.frame_queue_slave(cfg => cfg_c, root => rsp_q, clock => s_clk,
                                            stream_i => s_rsp.m, stream_o => s_rsp.s, dt => clock_period);   
   end process;
