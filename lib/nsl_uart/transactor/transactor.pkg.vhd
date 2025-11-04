@@ -2,7 +2,7 @@ library ieee;
 use ieee.std_logic_1164.all;
 use ieee.numeric_std.all;
 
-library nsl_bnoc, nsl_uart;
+library nsl_bnoc, nsl_amba, nsl_uart;
 
 package transactor is
 
@@ -37,4 +37,31 @@ package transactor is
       );
   end component;
 
+  component cbor_controller is
+    generic(
+      system_clock_c     : natural;
+      axi_s_cfg_c        : nsl_amba.axi4_stream.config_t;
+      stop_count_c       : natural range 1 to 2 := 1;
+      parity_c           : nsl_uart.serdes.parity_t := nsl_uart.serdes.PARITY_NONE;
+      handshake_active_c : std_ulogic := '0';
+      divisor_c          : unsigned(0 to 31);
+      timeout_c          : unsigned(0 to 31);
+      tstr_max_size_c    : natural
+      );
+    port (
+      reset_n_i    : in std_ulogic;
+      clock_i      : in std_ulogic;
+      
+      tx_o   : out std_ulogic;
+      cts_i  : in std_ulogic := handshake_active_c;
+      rx_i   : in  std_ulogic;
+      rts_o  : out std_ulogic;
+
+      cmd_i  : in  nsl_amba.axi4_stream.master_t;
+      cmd_o  : out nsl_amba.axi4_stream.slave_t;
+      rsp_i  : in  nsl_amba.axi4_stream.slave_t;
+      rsp_o  : out nsl_amba.axi4_stream.master_t
+      );
+  end component;
+  
 end package transactor;
