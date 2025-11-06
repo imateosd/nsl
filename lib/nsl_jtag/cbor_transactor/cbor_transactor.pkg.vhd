@@ -55,7 +55,7 @@ package cbor_transactor is
 
   component controller
     generic(
-      system_clock_c  : natural;
+      clock_i_hz_c    : natural;
       axi_s_cfg_c     : nsl_amba.axi4_stream.config_t
     );
     port (

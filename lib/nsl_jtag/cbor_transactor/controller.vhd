@@ -7,7 +7,7 @@ use nsl_data.cbor.all;
 
 entity controller is
   generic(
-    system_clock_c  : natural;
+    clock_i_hz_c  : natural;
     axi_s_cfg_c     : nsl_amba.axi4_stream.config_t
     );
   port (
@@ -55,6 +55,9 @@ architecture rtl of controller is
     ST_RSP_BREAK_PREP,
     ST_RSP_BREAK_PUT
   );
+
+  -- Do I need both cmd_bit_count and bit_count? Do I need both cmd_data and
+  -- data? 
   
   type regs_t is
   record
@@ -75,7 +78,6 @@ architecture rtl of controller is
     encoded_len   : natural range 0 to 8;
     encoded_i     : natural range 0 to 8;
     last          : boolean;
-    cmd_cancelled : boolean;
     inside_cmd    : boolean;
   end record;
 
@@ -127,7 +129,6 @@ architecture rtl of controller is
       when others                => return "UNKNOWN";
     end case;
   end;
-    
   
   procedure log_state_change(r : regs_t; rin: regs_t) is  begin
     if c_print_logs then
@@ -176,7 +177,6 @@ begin
           rin.encoded_len   <= 0;
           rin.encoded_i     <= 0;
           rin.last          <= false;
-          rin.cmd_cancelled <= false;
           rin.inside_cmd    <= false;
           rin.tag           <= 0;
 
@@ -212,7 +212,6 @@ begin
             nsl_simulation.logging.log_info("cmd_i.data(0) " & nsl_data.text.to_hex_string(cmd_i.data(0)));
             rin.parser <= nsl_data.cbor.feed(r.parser, cmd_i.data(0));
             if nsl_data.cbor.is_last( r.parser, cmd_i.data(0) ) then
-              rin.cmd_cancelled <= false;
               rin.state <= ST_CMD_EXEC;
               if not r.indefinite and not r.inside_cmd then
                 rin.command_count <= r.command_count - 1;
@@ -271,7 +270,7 @@ begin
             rin.state       <= ST_ATE_RUN;
           elsif r.tag = 11 then -- run for ms
             nsl_simulation.logging.log_info("Running ATE_OP_RTI for " & nsl_data.text.to_string(nsl_data.cbor.arg_int(r.parser)) & "ms");
-            rin.word_count  <= to_unsigned(nsl_data.cbor.arg_int(r.parser) * 1000/system_clock_c, 64 ); -- need tick speed here!!
+            rin.word_count  <= to_unsigned(nsl_data.cbor.arg_int(r.parser) * 1000/clock_i_hz_c, 64 ); -- need tick speed here!!
             rin.state       <= ST_ATE_RUN;
           end if;
 
