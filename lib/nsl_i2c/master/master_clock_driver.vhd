@@ -384,8 +384,15 @@ begin
         end case;
         
       when ST_ROUTE =>
-        null;
-        
+        case r.bus_state is
+          when BUS_OWNED =>
+            i2c_o.scl.drain_n <= '0';
+            owned_o <= '1';
+
+          when others =>
+            null;
+        end case;
+                
       when ST_RESTART_PRE =>
         i2c_o.sda.drain_n <= '0';
         i2c_o.scl.drain_n <= '0';

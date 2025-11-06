@@ -90,6 +90,7 @@ begin
     case r.state is
       when ST_RESET =>
         rin.state <= ST_ARB_LOST;
+        rin.send_mode <= '0';
 
       when ST_ARB_LOST =>
         if enable_i = '0' then

@@ -11,7 +11,7 @@ use nsl_data.cbor.all;
 
 entity controller is
     generic(
-        system_clock_c : natural;
+        clock_i_hz_c : natural;
         axi_s_cfg_c    : nsl_amba.axi4_stream.config_t
     );
     port(
@@ -99,10 +99,10 @@ architecture beh of controller is
         owned         : std_ulogic;
         addr          : std_ulogic_vector(9 downto 0);
         data          : std_ulogic_vector(7 downto 0);
-        word_count    : unsigned(0 to 63);
-        word_total    : unsigned(0 to 63);
-        command_count : unsigned(31 downto 0); -- this could be up to 63 downto 0
-        divisor       : unsigned(5 downto 0);
+        word_count    : unsigned(9 downto 0);
+        word_total    : unsigned(9 downto 0);
+        command_count : unsigned(31 downto 0); -- TODO do I make this smaller?
+        divisor       : unsigned(10 downto 0);
         parser        : nsl_data.cbor.parser_t;
         indefinite    : boolean;
         last          : boolean; 
@@ -140,104 +140,58 @@ architecture beh of controller is
       return result;
     end;
 
-    procedure log_state_change(r : regs_t; rin: regs_t) is
-      constant string_len : integer := 16;
-      variable c_state, n_state : string (1 to string_len);
+    function state_to_string(s: state_t) return string is
     begin
       case r.state is
-        when ST_RESET => c_state := to_fixed("ST_RESET", string_len);
-        when ST_ARRAY_GET => c_state := to_fixed("ST_ARRAY_GET", string_len);
-        when ST_ARRAY_ENTER => c_state := to_fixed("ST_ARRAY_ENTER", string_len);
-        when ST_CMD_GET => c_state := to_fixed("ST_CMD_GET", string_len);
-        when ST_CMD_EXEC => c_state := to_fixed("ST_CMD_EXEC", string_len);
-        when ST_CMD_END => c_state := to_fixed("ST_CMD_END", string_len);
-        when ST_ADDR_GET => c_state := to_fixed("ST_ADDR_GET", string_len);
-        when ST_ADDR_SET => c_state := to_fixed("ST_ADDR_SET", string_len);
-        when ST_OP_GET => c_state := to_fixed("ST_OP_GET", string_len);
-        when ST_ADDR_SET_W_R => c_state := to_fixed("ST_ADDR_SET_W_R", string_len);
-        when ST_ADDR_RUN => c_state := to_fixed("ST_ADDR_RUN", string_len);
-        when ST_ADDR_DATA => c_state := to_fixed("ST_ADDR_DATA", string_len);
-        when ST_ADDR_ACK => c_state := to_fixed("ST_ADDR_ACK", string_len);
-        when ST_WRITE_GET => c_state := to_fixed("ST_WRITE_GET", string_len);
-        when ST_WRITE_RUN => c_state := to_fixed("ST_WRITE_RUN", string_len);
-        when ST_WRITE_DATA => c_state := to_fixed("ST_WRITE_DATA", string_len);
-        when ST_WRITE_ACK => c_state := to_fixed("ST_WRITE_ACK", string_len);
-        when ST_WRITE_END => c_state := to_fixed("ST_WRITE_END", string_len);
-        when ST_READ_RUN => c_state := to_fixed("ST_READ_RUN", string_len);
-        when ST_READ_DATA => c_state := to_fixed("ST_READ_DATA", string_len);
-        when ST_READ_ACK => c_state := to_fixed("ST_READ_ACK", string_len);
-        when ST_READ_PUT => c_state := to_fixed("ST_READ_PUT", string_len);
-        when ST_READ_END => c_state := to_fixed("ST_READ_END", string_len);
-        when ST_START => c_state := to_fixed("ST_START", string_len);
-        when ST_START_WAIT => c_state := to_fixed("ST_START_WAIT", string_len);
-        when ST_STOP => c_state := to_fixed("ST_STOP", string_len);
-        when ST_STOP_WAIT => c_state := to_fixed("ST_STOP_WAIT", string_len);
-        when ST_RSP_OK_PREP => c_state := to_fixed("ST_RSP_OK_PREP", string_len);
-        when ST_RSP_OK_PUT => c_state := to_fixed("ST_RSP_OK_PUT", string_len);
-        when ST_RSP_ANACK_PREP => c_state := to_fixed("ST_RSP_ANACK_PREP", string_len);
-        when ST_RSP_ANACK_PUT => c_state := to_fixed("ST_RSP_ANACK_PUT", string_len);
-        when ST_RSP_DNACK_PREP => c_state := to_fixed("ST_RSP_DNACK_PREP", string_len);
-        when ST_RSP_DNACK_PUT => c_state := to_fixed("ST_RSP_DNACK_PUT", string_len);
-        when ST_RSP_ARRAY_HDR_PREP => c_state := to_fixed("ST_RSP_ARRAY_HDR_PREP", string_len);
-        when ST_RSP_ARRAY_HDR_PUT => c_state := to_fixed("ST_RSP_ARRAY_HDR_PUT", string_len);
-        when ST_RSP_BSTR_HDR_PREP => c_state := to_fixed("ST_RSP_BSTR_HDR_PREP", string_len);
-        when ST_RSP_BSTR_HDR_PUT => c_state := to_fixed("ST_RSP_BSTR_HDR_PUT", string_len);
-        when ST_RSP_BREAK_PREP => c_state := to_fixed("ST_RSP_BREAK_PREP", string_len);
-        when ST_RSP_BREAK_PUT => c_state := to_fixed("ST_RSP_BREAK_PUT", string_len);
-        when ST_IO_FLUSH_GET => c_state := to_fixed("ST_IO_FLUSH_GET", string_len);
-        when ST_IO_FLUSH_PUT => c_state := to_fixed("ST_IO_FLUSH_PUT", string_len);
-        when others => c_state := to_fixed("UNKNOWN", string_len);
+        when ST_RESET              => return "ST_RESET";
+        when ST_ARRAY_GET          => return "ST_ARRAY_GET";
+        when ST_ARRAY_ENTER        => return "ST_ARRAY_ENTER";
+        when ST_CMD_GET            => return "ST_CMD_GET";
+        when ST_CMD_EXEC           => return "ST_CMD_EXEC";
+        when ST_CMD_END            => return "ST_CMD_END";
+        when ST_ADDR_GET           => return "ST_ADDR_GET";
+        when ST_ADDR_SET           => return "ST_ADDR_SET";
+        when ST_OP_GET             => return "ST_OP_GET";
+        when ST_ADDR_SET_W_R       => return "ST_ADDR_SET_W_R";
+        when ST_ADDR_RUN           => return "ST_ADDR_RUN";
+        when ST_ADDR_DATA          => return "ST_ADDR_DATA";
+        when ST_ADDR_ACK           => return "ST_ADDR_ACK";
+        when ST_WRITE_GET          => return "ST_WRITE_GET";
+        when ST_WRITE_RUN          => return "ST_WRITE_RUN";
+        when ST_WRITE_DATA         => return "ST_WRITE_DATA";
+        when ST_WRITE_ACK          => return "ST_WRITE_ACK";
+        when ST_WRITE_END          => return "ST_WRITE_END";
+        when ST_READ_RUN           => return "ST_READ_RUN";
+        when ST_READ_DATA          => return "ST_READ_DATA";
+        when ST_READ_ACK           => return "ST_READ_ACK";
+        when ST_READ_PUT           => return "ST_READ_PUT";
+        when ST_READ_END           => return "ST_READ_END";
+        when ST_START              => return "ST_START";
+        when ST_START_WAIT         => return "ST_START_WAIT";
+        when ST_STOP               => return "ST_STOP";
+        when ST_STOP_WAIT          => return "ST_STOP_WAIT";
+        when ST_RSP_OK_PREP        => return "ST_RSP_OK_PREP";
+        when ST_RSP_OK_PUT         => return "ST_RSP_OK_PUT";
+        when ST_RSP_ANACK_PREP     => return "ST_RSP_ANACK_PREP";
+        when ST_RSP_ANACK_PUT      => return "ST_RSP_ANACK_PUT";
+        when ST_RSP_DNACK_PREP     => return "ST_RSP_DNACK_PREP";
+        when ST_RSP_DNACK_PUT      => return "ST_RSP_DNACK_PUT";
+        when ST_RSP_ARRAY_HDR_PREP => return "ST_RSP_ARRAY_HDR_PREP";
+        when ST_RSP_ARRAY_HDR_PUT  => return "ST_RSP_ARRAY_HDR_PUT";
+        when ST_RSP_BSTR_HDR_PREP  => return "ST_RSP_BSTR_HDR_PREP";
+        when ST_RSP_BSTR_HDR_PUT   => return "ST_RSP_BSTR_HDR_PUT";
+        when ST_RSP_BREAK_PREP     => return "ST_RSP_BREAK_PREP";
+        when ST_RSP_BREAK_PUT      => return "ST_RSP_BREAK_PUT";
+        when ST_IO_FLUSH_GET       => return "ST_IO_FLUSH_GET";
+        when ST_IO_FLUSH_PUT       => return "ST_IO_FLUSH_PUT";
+        when others                => return "UNKNOWN";
       end case;
+    end;
 
-      case rin.state is
-        when ST_RESET => n_state := to_fixed("ST_RESET", string_len);
-        when ST_ARRAY_GET => n_state := to_fixed("ST_ARRAY_GET", string_len);
-        when ST_ARRAY_ENTER => n_state := to_fixed("ST_ARRAY_ENTER", string_len);
-        when ST_CMD_GET => n_state := to_fixed("ST_CMD_GET", string_len);
-        when ST_CMD_EXEC => n_state := to_fixed("ST_CMD_EXEC", string_len);
-        when ST_CMD_END => n_state := to_fixed("ST_CMD_END", string_len);
-        when ST_ADDR_GET => n_state := to_fixed("ST_ADDR_GET", string_len);
-        when ST_ADDR_SET => n_state := to_fixed("ST_ADDR_SET", string_len);
-        when ST_OP_GET => n_state := to_fixed("ST_OP_GET", string_len);
-        when ST_ADDR_SET_W_R => n_state := to_fixed("ST_ADDR_SET_W_R", string_len);
-        when ST_ADDR_RUN => n_state := to_fixed("ST_ADDR_RUN", string_len);
-        when ST_ADDR_DATA => n_state := to_fixed("ST_ADDR_DATA", string_len);
-        when ST_ADDR_ACK => n_state := to_fixed("ST_ADDR_ACK", string_len);
-        when ST_WRITE_GET => n_state := to_fixed("ST_WRITE_GET", string_len);
-        when ST_WRITE_RUN => n_state := to_fixed("ST_WRITE_RUN", string_len);
-        when ST_WRITE_DATA => n_state := to_fixed("ST_WRITE_DATA", string_len);
-        when ST_WRITE_ACK => n_state := to_fixed("ST_WRITE_ACK", string_len);
-        when ST_WRITE_END => n_state := to_fixed("ST_WRITE_END", string_len);
-        when ST_READ_RUN => n_state := to_fixed("ST_READ_RUN", string_len);
-        when ST_READ_DATA => n_state := to_fixed("ST_READ_DATA", string_len);
-        when ST_READ_ACK => n_state := to_fixed("ST_READ_ACK", string_len);
-        when ST_READ_PUT => n_state := to_fixed("ST_READ_PUT", string_len);
-        when ST_READ_END => n_state := to_fixed("ST_READ_END", string_len);
-        when ST_START => n_state := to_fixed("ST_START", string_len);
-        when ST_START_WAIT => n_state := to_fixed("ST_START_WAIT", string_len);
-        when ST_STOP => n_state := to_fixed("ST_STOP", string_len);
-        when ST_STOP_WAIT => n_state := to_fixed("ST_STOP_WAIT", string_len);
-        when ST_RSP_OK_PREP => n_state := to_fixed("ST_RSP_OK_PREP", string_len);
-        when ST_RSP_OK_PUT => n_state := to_fixed("ST_RSP_OK_PUT", string_len);
-        when ST_RSP_ANACK_PREP => n_state := to_fixed("ST_RSP_ANACK_PREP", string_len);
-        when ST_RSP_ANACK_PUT => n_state := to_fixed("ST_RSP_ANACK_PUT", string_len);
-        when ST_RSP_DNACK_PREP => n_state := to_fixed("ST_RSP_DNACK_PREP", string_len);
-        when ST_RSP_DNACK_PUT => n_state := to_fixed("ST_RSP_DNACK_PUT", string_len);
-        when ST_RSP_ARRAY_HDR_PREP => n_state := to_fixed("ST_RSP_ARRAY_HDR_PREP", string_len);
-        when ST_RSP_ARRAY_HDR_PUT => n_state := to_fixed("ST_RSP_ARRAY_HDR_PUT", string_len);
-        when ST_RSP_BSTR_HDR_PREP => n_state := to_fixed("ST_RSP_BSTR_HDR_PREP", string_len);
-        when ST_RSP_BSTR_HDR_PUT => n_state := to_fixed("ST_RSP_BSTR_HDR_PUT", string_len);
-        when ST_RSP_BREAK_PREP => n_state := to_fixed("ST_RSP_BREAK_PREP", string_len);
-        when ST_RSP_BREAK_PUT => n_state := to_fixed("ST_RSP_BREAK_PUT", string_len);
-        when ST_IO_FLUSH_GET => n_state := to_fixed("ST_IO_FLUSH_GET", string_len);
-        when ST_IO_FLUSH_PUT => n_state := to_fixed("ST_IO_FLUSH_PUT", string_len);
-        when others => n_state := to_fixed("UNKNOWN", string_len);
-      end case;
-
-    if c_print_logs then
-      nsl_simulation.logging.log_info("In " & c_state & " => " & n_state & character'val(10));
-    end if;
-
+    procedure log_state_change(r : regs_t; rin: regs_t) is  begin
+      if c_print_logs then
+        nsl_simulation.logging.log_info("In " & state_to_string(r.state) & " => " & state_to_string(rin.state) & LF );
+      end if;
     end procedure;
 
 begin
@@ -260,7 +214,7 @@ begin
       clock_i   => clock_i,
       reset_n_i => reset_n_i,
 
-      half_cycle_clock_count_i => to_unsigned(10, 3),
+      half_cycle_clock_count_i => to_unsigned(10*25, 8),
 
       i2c_i => i2c_filt_i,
       i2c_o => i2c_clocker_o,
@@ -433,13 +387,13 @@ begin
           if nsl_data.cbor.kind(r.parser) = KIND_POSITIVE then
             -- READ OPERATION
             rin.addr <= r.addr(8 downto 0) & '1';
-            rin.word_count <= nsl_data.cbor.arg(r.parser, 64);
-            rin.word_total <= nsl_data.cbor.arg(r.parser, 64);
+            rin.word_count <= nsl_data.cbor.arg(r.parser, 10);
+            rin.word_total <= nsl_data.cbor.arg(r.parser, 10);
           elsif nsl_data.cbor.kind(r.parser) = KIND_BSTR then
             -- WRITE OPERATION
             rin.addr <= r.addr(8 downto 0) & '0';
-            rin.word_count <= nsl_data.cbor.arg(r.parser, 64);
-            rin.word_total <= nsl_data.cbor.arg(r.parser, 64);
+            rin.word_count <= nsl_data.cbor.arg(r.parser, 10);
+            rin.word_total <= nsl_data.cbor.arg(r.parser, 10);
           else
             -- rin.state <= ST_START;
           end if;
@@ -506,9 +460,8 @@ begin
 
         when ST_READ_ACK =>
           if shift_w_ready_i = '1' then
-            rin.word_count <= (r.word_count - 1) mod 64;
+            rin.word_count <= r.word_count - 1;
             rin.state <= ST_READ_PUT;
-            -- rin.last <= (r.word_count - 1) = 0;
           end if;
        
         when ST_READ_PUT =>
@@ -529,7 +482,7 @@ begin
             if not r.cmd_cancelled then
               rin.state <= ST_WRITE_RUN;
             else
-              rin.word_count <= (r.word_count - 1) mod 64;
+              rin.word_count <= r.word_count - 1;
               rin.state <= ST_WRITE_END;
               nsl_simulation.logging.log_info("[Cancelled command] In ST_WRITE_GET, discarding a byte and going to ST_WRITE_END");
             end if;
@@ -547,7 +500,7 @@ begin
 
         when ST_WRITE_ACK =>
           if shift_r_valid_i = '1' then
-            rin.word_count <= (r.word_count - 1) mod 64;
+            rin.word_count <= r.word_count - 1;
             if shift_r_data_i(0) = '1' then -- NACK
               rin.state <= ST_RSP_DNACK_PREP;
               rin.cmd_cancelled <= true;
@@ -590,9 +543,9 @@ begin
               rin.parser <= nsl_data.cbor.feed(r.parser, cmd_i.data(0));
             end if;
           else
-            rin.timeout  <= integer( nsl_data.cbor.arg_int(r.parser) * system_clock_c / 1000000 );
+            rin.timeout  <= integer( nsl_data.cbor.arg_int(r.parser) * clock_i_hz_c / 1000000 );
             nsl_simulation.logging.log_info("arg is " & nsl_data.text.to_string(nsl_data.cbor.arg_int(r.parser)) );
-            nsl_simulation.logging.log_info("Setting r.timeout to " & nsl_data.text.to_string(integer( nsl_data.cbor.arg_int(r.parser) * system_clock_c / 1000000)));
+            nsl_simulation.logging.log_info("Setting r.timeout to " & nsl_data.text.to_string(integer( nsl_data.cbor.arg_int(r.parser) * clock_i_hz_c / 1000000)));
             rin.parser   <= nsl_data.cbor.reset;
             rin.state    <= ST_ADDR_GET;
           end if;
@@ -613,7 +566,7 @@ begin
 
         when ST_IO_FLUSH_PUT =>
           if rsp_i.ready = '1' then
-            rin.word_count <= (r.word_count - 1) mod 64;
+            rin.word_count <= r.word_count - 1;
             if r.word_count = 0 then
               rin.state <= ST_CMD_GET;
             end if;
@@ -643,8 +596,10 @@ begin
           end if;
         
         when ST_RSP_ANACK_PREP =>
-          rin.data  <= nsl_data.cbor.cbor_false(0);
-          rin.state <= ST_RSP_ANACK_PUT;
+          if clocker_ready_i = '1' then
+            rin.data  <= nsl_data.cbor.cbor_false(0);
+            rin.state <= ST_RSP_ANACK_PUT;
+          end if;
         
         when ST_RSP_ANACK_PUT =>
           if rsp_i.ready = '1' then
@@ -658,15 +613,17 @@ begin
           end if;
         
         when ST_RSP_DNACK_PREP =>
-          nsl_data.bytestream.write(s => cbr_encoded, d => nsl_data.cbor.cbor_tagged(tag => 2, item => nsl_data.cbor.cbor_positive(value => to_integer(r.word_total - r.word_count - 1) ))  );
-          nsl_simulation.logging.log_info("cbr_encoded " & nsl_data.text.to_string(cbr_encoded.all) );
+          if clocker_ready_i = '1' then
+            nsl_data.bytestream.write(s => cbr_encoded, d => nsl_data.cbor.cbor_tagged(tag => 2, item => nsl_data.cbor.cbor_positive(value => to_integer(r.word_total - r.word_count - 1) ))  );
+            nsl_simulation.logging.log_info("cbr_encoded " & nsl_data.text.to_string(cbr_encoded.all) );
 
-          rin.encoded_len <= cbr_encoded.all'length;
-          rin.encoded(cbr_encoded.all'length-1 downto 0) <= cbr_encoded.all;
-          nsl_data.bytestream.clear(s => cbr_encoded);
+            rin.encoded_len <= cbr_encoded.all'length;
+            rin.encoded(cbr_encoded.all'length-1 downto 0) <= cbr_encoded.all;
+            nsl_data.bytestream.clear(s => cbr_encoded);
 
-          rin.state <= ST_RSP_DNACK_PUT;
-          rin.last  <= false;
+            rin.state <= ST_RSP_DNACK_PUT;
+            rin.last  <= false;
+          end if;
           
         when ST_RSP_DNACK_PUT  =>
           if rsp_i.ready = '1' then
@@ -686,7 +643,7 @@ begin
           rin.state <= ST_RSP_ARRAY_HDR_PUT;
           rin.last  <= false;
           nsl_data.bytestream.clear(s => cbr_encoded);
-          
+        
       when ST_RSP_ARRAY_HDR_PUT =>
           if rsp_i.ready = '1' then
             if r.encoded_len - 1 = r.encoded_i then
@@ -738,7 +695,7 @@ begin
       rsp_o <= nsl_amba.axi4_stream.transfer_defaults(cfg => axi_s_cfg_c);
 
       shift_enable_o <= '0';
-      shift_send_data_o <= '-';
+      shift_send_data_o <= '0';
       shift_w_valid_o <= '0';
       shift_r_ready_o <= '0';
       shift_w_data_o <= (others => '-');
@@ -768,8 +725,11 @@ begin
           
           
         when ST_ARRAY_ENTER | ST_CMD_EXEC | ST_CMD_END | ST_ADDR_SET | ST_ADDR_SET_W_R | ST_WRITE_END | ST_READ_END =>
-        when ST_RSP_OK_PREP| ST_RSP_DNACK_PREP | ST_RSP_ANACK_PREP | ST_RSP_BSTR_HDR_PREP | ST_RSP_ARRAY_HDR_PREP | ST_RSP_BREAK_PREP =>
+        when ST_RSP_OK_PREP | ST_RSP_BSTR_HDR_PREP | ST_RSP_ARRAY_HDR_PREP | ST_RSP_BREAK_PREP =>
 
+        when ST_RSP_ANACK_PREP | ST_RSP_DNACK_PREP  =>
+          clocker_cmd_o <= I2C_BUS_RELEASE;
+          
         when ST_ADDR_RUN | ST_WRITE_RUN | ST_READ_RUN =>
           clocker_cmd_o <= I2C_BUS_RUN;
 
@@ -786,8 +746,12 @@ begin
         
         when ST_READ_ACK =>
           shift_w_valid_o <= '1';
-          shift_w_data_o <= (0 => '1', others => '-');
-        
+          if r.word_count /= 1 then
+            shift_w_data_o <= (0 => '0', others => '-');
+          else
+            shift_w_data_o <= (0 => '1', others => '-');
+          end if;
+                   
         when ST_START_WAIT | ST_STOP_WAIT =>
           clocker_cmd_o <= I2C_BUS_HOLD;
 
@@ -801,8 +765,6 @@ begin
           rsp_o <= nsl_amba.axi4_stream.transfer( cfg => axi_s_cfg_c, bytes => nsl_data.bytestream.from_suv(r.data) , last => r.last);
 
         when ST_RSP_BSTR_HDR_PUT | ST_RSP_ARRAY_HDR_PUT | ST_RSP_DNACK_PUT =>
-          -- nsl_simulation.logging.log_info("r.encoded_len " & nsl_data.text.to_string(r.encoded_len) & " sending r.encoded(" & nsl_data.text.to_string(r.encoded_len - r.encoded_i - 1) & " downto " & nsl_data.text.to_string(r.encoded_len - r.encoded_i - 1) & ")" );
-          -- nsl_simulation.logging.log_info("r.encoded " & nsl_data.text.to_string(r.encoded));
           rsp_o <= nsl_amba.axi4_stream.transfer( cfg => axi_s_cfg_c, bytes => r.encoded(r.encoded_len - r.encoded_i - 1 downto r.encoded_len - r.encoded_i - 1), last => r.last);
        
         when ST_IO_FLUSH_GET =>
