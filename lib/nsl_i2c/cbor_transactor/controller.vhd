@@ -11,8 +11,9 @@ use nsl_data.cbor.all;
 
 entity controller is
     generic(
-        clock_i_hz_c : natural;
-        axi_s_cfg_c    : nsl_amba.axi4_stream.config_t
+        clock_i_hz_c    : natural;
+        target_scl_hz_c : natural := 400000;
+        axi_s_cfg_c     : nsl_amba.axi4_stream.config_t
     );
     port(
         clock_i     : in std_ulogic;
@@ -99,18 +100,21 @@ architecture beh of controller is
         owned         : std_ulogic;
         addr          : std_ulogic_vector(9 downto 0);
         data          : std_ulogic_vector(7 downto 0);
-        word_count    : unsigned(9 downto 0);
-        word_total    : unsigned(9 downto 0);
-        command_count : unsigned(31 downto 0); -- TODO do I make this smaller?
-        divisor       : unsigned(10 downto 0);
+        
+        word_count    : natural range 0 to 1023;
+        word_total    : natural range 0 to 1023;
+        command_count : natural range 0 to 1023;
+        
         parser        : nsl_data.cbor.parser_t;
         indefinite    : boolean;
-        last          : boolean; 
+        cmd_cancelled : boolean;        
+
         encoded       : nsl_data.bytestream.byte_string(8 downto 0);
         encoded_len   : natural range 0 to 8;
         encoded_i     : natural range 0 to 8;
-        cmd_cancelled : boolean;
-        timeout       : integer;
+        last          : boolean;
+        
+        timeout       : natural; -- TODO: what should the limit be here?
     end record;
 
     signal r, rin : regs_t;
@@ -214,7 +218,7 @@ begin
       clock_i   => clock_i,
       reset_n_i => reset_n_i,
 
-      half_cycle_clock_count_i => to_unsigned(10*25, 8),
+      half_cycle_clock_count_i => to_unsigned(clock_i_hz_c/target_scl_hz_c, 16),
 
       i2c_i => i2c_filt_i,
       i2c_o => i2c_clocker_o,
@@ -287,13 +291,12 @@ begin
       case r.state is
         when ST_RESET =>
           nsl_simulation.logging.log_info("In ST_RESET");
-          rin.divisor       <= (others => '1');
           rin.state         <= ST_ARRAY_GET;
           rin.parser        <= nsl_data.cbor.reset;
-          rin.word_count    <= (others => '0');
-          rin.word_total    <= (others => '0');
-          rin.command_count <= (others => '0');
-          rin.addr          <= (others => '0');
+          rin.word_count    <= 0;
+          rin.word_total    <= 0;
+          rin.command_count <= 0;
+          rin.addr          <= (others => '-'); -- TODO: '0' or '-'?
           rin.data          <= (others => '-');
           rin.last          <= false;
           rin.encoded       <= (others => (others => '-') );
@@ -315,7 +318,7 @@ begin
         when ST_ARRAY_ENTER =>
           if nsl_data.cbor.kind(r.parser) = KIND_ARRAY then
             if not r.parser.indefinite then
-              rin.command_count <= nsl_data.cbor.arg(r.parser, 32);
+              rin.command_count <= nsl_data.cbor.arg_int(r.parser);
               rin.indefinite    <= false;
             else
               rin.indefinite    <= true;
@@ -367,11 +370,11 @@ begin
           
         when ST_ADDR_SET =>
           if nsl_data.cbor.kind(r.parser) = KIND_POSITIVE then
-            rin.addr <= std_ulogic_vector(nsl_data.cbor.arg(r.parser, 10));       
+            rin.addr <= std_ulogic_vector(nsl_data.cbor.arg(r.parser, 10));
             rin.parser <= nsl_data.cbor.reset;
             rin.state  <= ST_OP_GET;
           else
-            -- rin.state <= ST_IO_FLUSH_GET;
+            -- TODO : think about what to do it the parsed data is not correct!?
           end if;
 
         when ST_OP_GET =>
@@ -387,15 +390,15 @@ begin
           if nsl_data.cbor.kind(r.parser) = KIND_POSITIVE then
             -- READ OPERATION
             rin.addr <= r.addr(8 downto 0) & '1';
-            rin.word_count <= nsl_data.cbor.arg(r.parser, 10);
-            rin.word_total <= nsl_data.cbor.arg(r.parser, 10);
+            rin.word_count <= nsl_data.cbor.arg_int(r.parser);
+            rin.word_total <= nsl_data.cbor.arg_int(r.parser);
           elsif nsl_data.cbor.kind(r.parser) = KIND_BSTR then
             -- WRITE OPERATION
             rin.addr <= r.addr(8 downto 0) & '0';
-            rin.word_count <= nsl_data.cbor.arg(r.parser, 10);
-            rin.word_total <= nsl_data.cbor.arg(r.parser, 10);
+            rin.word_count <= nsl_data.cbor.arg_int(r.parser);
+            rin.word_total <= nsl_data.cbor.arg_int(r.parser);
           else
-            -- rin.state <= ST_START;
+            -- TODO : think about what to do it the parsed data is not correct!?
           end if;
 
         when ST_START =>
@@ -614,7 +617,7 @@ begin
         
         when ST_RSP_DNACK_PREP =>
           if clocker_ready_i = '1' then
-            nsl_data.bytestream.write(s => cbr_encoded, d => nsl_data.cbor.cbor_tagged(tag => 2, item => nsl_data.cbor.cbor_positive(value => to_integer(r.word_total - r.word_count - 1) ))  );
+            nsl_data.bytestream.write(s => cbr_encoded, d => nsl_data.cbor.cbor_tagged(tag => 2, item => nsl_data.cbor.cbor_positive(value => (r.word_total - r.word_count - 1) ))  );
             nsl_simulation.logging.log_info("cbr_encoded " & nsl_data.text.to_string(cbr_encoded.all) );
 
             rin.encoded_len <= cbr_encoded.all'length;
@@ -656,7 +659,7 @@ begin
           end if;
 
       when ST_RSP_BSTR_HDR_PREP =>
-          nsl_data.bytestream.write(s => cbr_encoded, d => nsl_data.cbor.cbor_bstr_hdr(length => to_integer(r.word_count)));
+          nsl_data.bytestream.write(s => cbr_encoded, d => nsl_data.cbor.cbor_bstr_hdr(length => r.word_count));
           rin.encoded_len <= cbr_encoded.all'length;
           rin.encoded(cbr_encoded.all'length-1 downto 0) <= cbr_encoded.all;
           nsl_data.bytestream.clear(s => cbr_encoded);

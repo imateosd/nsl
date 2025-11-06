@@ -38,8 +38,9 @@ package cbor_transactor is
 
   component controller
     generic(
-      clock_i_hz_c : natural;
-      axi_s_cfg_c    : nsl_amba.axi4_stream.config_t
+      clock_i_hz_c    : natural;
+      target_scl_hz_c : natural := 400000;
+      axi_s_cfg_c     : nsl_amba.axi4_stream.config_t
     );
     port(
       clock_i   : in std_ulogic;
