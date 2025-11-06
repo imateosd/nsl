@@ -30,7 +30,7 @@ entity controller is
 end entity;
 
 architecture beh of controller is
-
+  
     type state_t is (
         ST_RESET,
 
@@ -199,6 +199,18 @@ architecture beh of controller is
     end procedure;
 
 begin
+
+    assert nsl_amba.axi4_stream.byte_count(axi_s_cfg_c, cmd_i) = 1
+      report "AXI-Stream bad data length, must be 1 byte"
+      severity failure;
+    
+    assert axi_s_cfg_c.has_last = true
+      report "AXI-Stream configuration incorrect, must have TLAST"
+      severity failure;
+
+    assert axi_s_cfg_c.has_ready = true
+      report "AXI-Stream configuration incorrect, must have TREADY"
+      severity failure;
 
     line_mon: nsl_i2c.i2c.i2c_line_monitor
     generic map(
