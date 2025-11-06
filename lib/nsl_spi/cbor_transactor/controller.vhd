@@ -7,25 +7,25 @@ use nsl_data.cbor.all;
 
 entity controller is
   generic(
-    system_clock_c : natural;
-    axi_s_cfg_c    : nsl_amba.axi4_stream.config_t;
+    clock_i_hz_c  : natural;
+    axi_s_cfg_c   : nsl_amba.axi4_stream.config_t;
     slave_count_c : natural range 1 to 7 := 1
     );
   port(
-    clock_i    : in std_ulogic;
+    clock_i   : in std_ulogic;
     reset_n_i : in std_ulogic;
 
-    tick_i     : in std_ulogic;
+    tick_i    : in std_ulogic;
 
-    sck_o  : out std_ulogic;
-    cs_n_o  : out nsl_io.io.opendrain_vector(0 to slave_count_c-1);
-    mosi_o : out nsl_io.io.tristated;
-    miso_i : in  std_ulogic;
+    sck_o     : out std_ulogic;
+    cs_n_o    : out nsl_io.io.opendrain_vector(0 to slave_count_c-1);
+    mosi_o    : out nsl_io.io.tristated;
+    miso_i    : in  std_ulogic;
 
-    cmd_i : in  nsl_amba.axi4_stream.master_t;
-    cmd_o : out nsl_amba.axi4_stream.slave_t;
-    rsp_o : out nsl_amba.axi4_stream.master_t;
-    rsp_i : in nsl_amba.axi4_stream.slave_t
+    cmd_i     : in  nsl_amba.axi4_stream.master_t;
+    cmd_o     : out nsl_amba.axi4_stream.slave_t;
+    rsp_o     : out nsl_amba.axi4_stream.master_t;
+    rsp_i     : in nsl_amba.axi4_stream.slave_t
     );
 end entity;
 
