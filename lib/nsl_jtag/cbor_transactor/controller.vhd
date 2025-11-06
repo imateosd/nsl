@@ -214,9 +214,9 @@ begin
             if nsl_data.cbor.is_last( r.parser, cmd_i.data(0) ) then
               rin.cmd_cancelled <= false;
               rin.state <= ST_CMD_EXEC;
-            end if;
-            if not r.indefinite and not r.inside_cmd then
-              rin.command_count <= (r.command_count - 1) mod 32;
+              if not r.indefinite and not r.inside_cmd then
+                rin.command_count <= r.command_count - 1;
+              end if;
             end if;
           end if;
 
@@ -224,8 +224,8 @@ begin
         rin.inside_cmd <= false;
         if nsl_data.cbor.kind(r.parser) = nsl_data.cbor.KIND_TAG then
           rin.tag <= nsl_data.cbor.arg_int(r.parser);
-          if nsl_data.cbor.arg_int(r.parser) > 0 and nsl_data.cbor.arg_int(r.parser) < 8 then
-            rin.bit_count  <= data_max_size - nsl_data.cbor.arg_int(r.parser);
+          if nsl_data.cbor.arg_int(r.parser) > 0 and nsl_data.cbor.arg_int(r.parser) < 8 then -- minus
+            rin.bit_count  <= data_max_size - nsl_data.cbor.arg_int(r.parser) - 1;
             rin.inside_cmd <= true;
             rin.state      <= ST_CMD_GET; -- going to get the bstr header
           elsif nsl_data.cbor.arg_int(r.parser) = 8 then -- SHIFT with no TDI
@@ -268,7 +268,7 @@ begin
             rin.cmd_bit_count <= 0;
             rin.word_count  <= nsl_data.cbor.arg(r.parser, 64);
             rin.cmd_pending <= nsl_jtag.ate.ATE_OP_RESET;
-            rin.state                <= ST_ATE_RUN;
+            rin.state       <= ST_ATE_RUN;
           elsif r.tag = 11 then -- run for ms
             nsl_simulation.logging.log_info("Running ATE_OP_RTI for " & nsl_data.text.to_string(nsl_data.cbor.arg_int(r.parser)) & "ms");
             rin.word_count  <= to_unsigned(nsl_data.cbor.arg_int(r.parser) * 1000/system_clock_c, 64 ); -- need tick speed here!!
@@ -336,7 +336,7 @@ begin
       when ST_ATE_WAIT_FOR_DONE => 
         if s_cmd_ready = '1' then
           if r.word_count /= 0 then
-            rin.word_count <= (r.word_count - 1) mod 64;
+            rin.word_count <= (r.word_count - 1);
             rin.state <= ST_ATE_RUN;
           else
             rin.state <= ST_CMD_END;
@@ -352,12 +352,12 @@ begin
         if r.has_tdi then
           if cmd_i.valid = '1' then
             rin.cmd_data <= cmd_i.data(0);
-            rin.word_count <= (r.word_count - 1) mod 64;
+            rin.word_count <= (r.word_count - 1);
             rin.state <= ST_DATA_RUN;
           end if;
         else
           rin.cmd_data <= (others => '0');
-          rin.word_count <= (r.word_count - 1) mod 64;
+          rin.word_count <= (r.word_count - 1);
           rin.state <= ST_DATA_RUN;
         end if;
 
@@ -404,7 +404,7 @@ begin
               rin.encoded_len <= 0;
               rin.encoded_i   <= 0;
             else
-              rin.encoded_i <= (r.encoded_i + 1) mod 9;
+              rin.encoded_i <= (r.encoded_i + 1);
             end if;
           end if;
 
@@ -422,7 +422,7 @@ begin
               rin.encoded_len <= 0;
               rin.encoded_i <= 0;
             else
-              rin.encoded_i <= (r.encoded_i + 1) mod 9;
+              rin.encoded_i <= (r.encoded_i + 1);
             end if;
           end if;
           
