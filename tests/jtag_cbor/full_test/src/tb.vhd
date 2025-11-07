@@ -119,7 +119,8 @@ begin
 
   dut: nsl_jtag.cbor_transactor.controller
   generic map(
-    system_clock_c => 10e6,
+    clock_i_hz_c => 10e7,
+    tick_i_hz_c  => 10e7/to_integer(tick_divisor),
     axi_s_cfg_c    => cfg_c
     )
   port map(
@@ -200,6 +201,10 @@ begin
     nsl_simulation.logging.log(level => nsl_simulation.logging.LOG_LEVEL_INFO,
                                message => "============================== #2  Minus with no TDO run correctly" & LF, color => nsl_simulation.logging.LOG_COLOR_GREEN);
 
+    nsl_simulation.logging.log(level => nsl_simulation.logging.LOG_LEVEL_INFO, message => "Testing 'run for ms'", color => nsl_simulation.logging.LOG_COLOR_BLUE);
+    nsl_amba.axi4_stream.frame_queue_put(root => cmd_q,
+                                         data => nsl_data.bytestream.from_suv(x"81CB03"));
+       
     -- nsl_simulation.logging.log(level => nsl_simulation.logging.LOG_LEVEL_INFO, message => "Testing Chain enum", color => nsl_simulation.logging.LOG_COLOR_BLUE);
     -- nsl_amba.axi4_stream.frame_queue_check_io(root_master => cmd_q,
     --                                           root_slave  => rsp_q,
@@ -210,8 +215,8 @@ begin
     --                                           timeout => clock_period*2000000);
     -- nsl_simulation.logging.log(level => nsl_simulation.logging.LOG_LEVEL_INFO, message => "==================================================================================== #1 CMD-RSP CHECK PASSED" & LF, color => nsl_simulation.logging.LOG_COLOR_GREEN);
 
-    -- wait for 1000 ns;                  
-
+    wait for 5 ms;
+    nsl_simulation.logging.log_info("after waiting 5 ms, going to terminate simulation");
     nsl_simulation.control.terminate(0);
   end process;
 

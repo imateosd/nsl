@@ -55,22 +55,23 @@ package cbor_transactor is
 
   component controller
     generic(
-      clock_i_hz_c    : natural;
-      axi_s_cfg_c     : nsl_amba.axi4_stream.config_t
+      clock_i_hz_c : natural;
+      tick_i_hz_c  : natural;
+      axi_s_cfg_c  : nsl_amba.axi4_stream.config_t
     );
     port (
-      clock_i         : in  std_ulogic;
-      reset_n_i       : in  std_ulogic;
+      clock_i      : in  std_ulogic;
+      reset_n_i    : in  std_ulogic;
 
-      tick_i          : in  std_ulogic;
+      tick_i       : in  std_ulogic;
 
-      cmd_i           : in  nsl_amba.axi4_stream.master_t;
-      cmd_o           : out nsl_amba.axi4_stream.slave_t;
-      rsp_o           : out nsl_amba.axi4_stream.master_t;
-      rsp_i           : in  nsl_amba.axi4_stream.slave_t;
+      cmd_i        : in  nsl_amba.axi4_stream.master_t;
+      cmd_o        : out nsl_amba.axi4_stream.slave_t;
+      rsp_o        : out nsl_amba.axi4_stream.master_t;
+      rsp_i        : in  nsl_amba.axi4_stream.slave_t;
 
-      jtag_o          : out nsl_jtag.jtag.jtag_ate_o;
-      jtag_i          : in  nsl_jtag.jtag.jtag_ate_i
+      jtag_o       : out nsl_jtag.jtag.jtag_ate_o;
+      jtag_i       : in  nsl_jtag.jtag.jtag_ate_i
       );
   end component;  
 end package cbor_transactor;

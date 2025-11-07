@@ -7,22 +7,23 @@ use nsl_data.cbor.all;
 
 entity controller is
   generic(
-    clock_i_hz_c  : natural;
-    axi_s_cfg_c     : nsl_amba.axi4_stream.config_t
+    clock_i_hz_c : natural;
+    tick_i_hz_c  : natural;
+    axi_s_cfg_c  : nsl_amba.axi4_stream.config_t
     );
   port (
-    reset_n_i       : in  std_ulogic;
-    clock_i         : in  std_ulogic;
+    reset_n_i    : in  std_ulogic;
+    clock_i      : in  std_ulogic;
 
-    tick_i          : in std_ulogic;
+    tick_i       : in std_ulogic;
 
-    cmd_i           : in nsl_amba.axi4_stream.master_t;
-    cmd_o           : out nsl_amba.axi4_stream.slave_t;
-    rsp_o           : out nsl_amba.axi4_stream.master_t;
-    rsp_i           : in nsl_amba.axi4_stream.slave_t;
+    cmd_i        : in nsl_amba.axi4_stream.master_t;
+    cmd_o        : out nsl_amba.axi4_stream.slave_t;
+    rsp_o        : out nsl_amba.axi4_stream.master_t;
+    rsp_i        : in nsl_amba.axi4_stream.slave_t;
 
-    jtag_o          : out nsl_jtag.jtag.jtag_ate_o;
-    jtag_i          : in nsl_jtag.jtag.jtag_ate_i
+    jtag_o       : out nsl_jtag.jtag.jtag_ate_o;
+    jtag_i       : in nsl_jtag.jtag.jtag_ate_i
     );
 end entity;
 
@@ -55,38 +56,37 @@ architecture rtl of controller is
     ST_RSP_BREAK_PREP,
     ST_RSP_BREAK_PUT
   );
-
-  -- Do I need both cmd_bit_count and bit_count? Do I need both cmd_data and
-  -- data? 
   
   type regs_t is
   record
     state         : state_t;
+    
     cmd_pending   : nsl_jtag.ate.ate_op;
     cmd_bit_count : natural range 0 to data_max_size - 1;
     cmd_data      : std_ulogic_vector(7 downto 0);
+    
     has_tdo       : boolean;
     has_tdi       : boolean;
     data          : std_ulogic_vector(7 downto 0);
     bit_count     : natural range 0 to 7;
-    word_count    : unsigned(63 downto 0);
+    word_count    : natural range 0 to 4095;
+    
     parser        : nsl_data.cbor.parser_t;
     indefinite    : boolean;
     tag           : natural range 0 to 11;
-    command_count : unsigned(31 downto 0);
+    command_count : natural range 0 to 1023;
+    inside_cmd    : boolean;
+    
     encoded       : nsl_data.bytestream.byte_string(8 downto 0);
     encoded_len   : natural range 0 to 8;
     encoded_i     : natural range 0 to 8;
     last          : boolean;
-    inside_cmd    : boolean;
   end record;
 
   signal r, rin: regs_t;
   
   signal s_cmd_ready    : std_ulogic;
   signal s_cmd_valid    : std_ulogic;
-  signal s_cmd_op       : nsl_jtag.ate.ate_op;
-  signal s_cmd_data     : std_ulogic_vector(data_max_size-1 downto 0);
 
   signal s_rsp_ready    : std_ulogic;
   signal s_rsp_valid    : std_ulogic;
@@ -114,8 +114,11 @@ architecture rtl of controller is
       when ST_CMD_GET            => return "ST_CMD_GET";
       when ST_CMD_EXEC           => return "ST_CMD_EXEC";
       when ST_CMD_END            => return "ST_CMD_END";
+      when ST_ATE_RUN            => return "ST_ATE_RUN";
+      when ST_ATE_WAIT_FOR_DONE  => return "ST_ATE_WAIT_FOR_DONE";
       when ST_DATA_GET           => return "ST_DATA_GET";
       when ST_DATA_RUN           => return "ST_DATA_RUN";
+      when ST_DATA_GET_RSP       => return "ST_DATA_GET_RSP";
       when ST_DATA_PUT           => return "ST_DATA_PUT";
       when ST_RSP_ARRAY_HDR_PREP => return "ST_RSP_ARRAY_HDR_PREP";
       when ST_RSP_ARRAY_HDR_PUT  => return "ST_RSP_ARRAY_HDR_PUT";
@@ -123,9 +126,6 @@ architecture rtl of controller is
       when ST_RSP_BSTR_HDR_PUT   => return "ST_RSP_BSTR_HDR_PUT";
       when ST_RSP_BREAK_PREP     => return "ST_RSP_BREAK_PREP";
       when ST_RSP_BREAK_PUT      => return "ST_RSP_BREAK_PUT";
-      when ST_ATE_RUN            => return "ST_ATE_RUN";
-      when ST_ATE_WAIT_FOR_DONE  => return "ST_ATE_WAIT_FOR_DONE";
-      when ST_DATA_GET_RSP       => return "ST_DATA_GET_RSP";
       when others                => return "UNKNOWN";
     end case;
   end;
@@ -138,6 +138,18 @@ architecture rtl of controller is
 
 begin
   
+  assert nsl_amba.axi4_stream.byte_count(axi_s_cfg_c, cmd_i) = 1
+    report "AXI-Stream bad data length, must be 1 byte"
+    severity failure;
+  
+  assert axi_s_cfg_c.has_last = true
+    report "AXI-Stream configuration incorrect, must have TLAST"
+    severity failure;
+  
+  assert axi_s_cfg_c.has_ready = true
+    report "AXI-Stream configuration incorrect, must have TREADY"
+    severity failure;
+
   reg: process(clock_i, reset_n_i)
   begin
     if rising_edge(clock_i) then
@@ -169,10 +181,10 @@ begin
           rin.has_tdi       <= true;
           rin.data          <= (others => '-');
           rin.bit_count     <= 0;
-          rin.word_count    <= (others => '0');
+          rin.word_count    <= 0;
           rin.parser        <= nsl_data.cbor.reset;
           rin.indefinite    <= false;
-          rin.command_count <= (others => '0');
+          rin.command_count <= 0;
           rin.encoded       <= (others => (others => '-') );
           rin.encoded_len   <= 0;
           rin.encoded_i     <= 0;
@@ -194,8 +206,8 @@ begin
       when ST_ARRAY_ENTER =>
         if nsl_data.cbor.kind(r.parser) = nsl_data.cbor.KIND_ARRAY then
           if not r.parser.indefinite then
-            nsl_simulation.logging.log_info("r.command_count set to " & nsl_data.text.to_string(nsl_data.cbor.arg(r.parser, 32)));
-            rin.command_count <= nsl_data.cbor.arg(r.parser, 32);
+            nsl_simulation.logging.log_info("r.command_count set to " & nsl_data.text.to_string(nsl_data.cbor.arg_int(r.parser)));
+            rin.command_count <= nsl_data.cbor.arg_int(r.parser);
             rin.indefinite    <= false;
           else
             rin.indefinite    <= true;
@@ -236,47 +248,49 @@ begin
             rin.inside_cmd <= true;
             rin.state      <= ST_CMD_GET; -- going to get the data to SHIFT IN
           elsif nsl_data.cbor.arg_int(r.parser) = 10 then -- reset for N cycles
-            rin.cmd_pending <= nsl_jtag.ate.ATE_OP_RESET;
             rin.inside_cmd <= true;
             rin.state      <= ST_CMD_GET;  -- going to get the number of cycles
           elsif nsl_data.cbor.arg_int(r.parser) = 11 then -- RTI for N ms
-            rin.cmd_pending <= nsl_jtag.ate.ATE_OP_RTI;
             rin.inside_cmd <= true;
             rin.state      <= ST_CMD_GET; -- going to get the number of ms
           end if;
         
         elsif nsl_data.cbor.kind(r.parser) = nsl_data.cbor.KIND_POSITIVE then
           if r.tag = 0 then -- not inside a tag!!
-            nsl_simulation.logging.log_info("Running ATE_OP_RTI");
+            nsl_simulation.logging.log_info("Running ATE_OP_RTI for " & nsl_data.text.to_string(nsl_data.cbor.arg_int(r.parser)) & " cycles");
             rin.cmd_bit_count <= 0;
-            rin.word_count  <= nsl_data.cbor.arg(r.parser, 64);
+            rin.word_count  <= nsl_data.cbor.arg_int(r.parser);
             rin.cmd_pending <= nsl_jtag.ate.ATE_OP_RTI;
             rin.state       <= ST_ATE_RUN;
           elsif r.tag > 0 and r.tag < 8 then
             nsl_simulation.logging.log_info("Running ATE_OP_SHIFT for n bytes = " & nsl_data.text.to_string(nsl_data.cbor.arg(r.parser, 64)));
-            rin.word_count  <= nsl_data.cbor.arg(r.parser, 64);
+            rin.word_count  <= nsl_data.cbor.arg_int(r.parser);
             rin.cmd_pending <= nsl_jtag.ate.ATE_OP_SHIFT;
             rin.state     <= ST_RSP_BSTR_HDR_PREP;
           elsif r.tag = 8 then
             nsl_simulation.logging.log_info("Running ATE_OP_SHIFT with no TDI for n bytes = " & nsl_data.text.to_string(nsl_data.cbor.arg(r.parser, 64)/8));
-            rin.word_count  <= to_unsigned(nsl_data.cbor.arg_int(r.parser)/8, 64);
+            rin.word_count  <= nsl_data.cbor.arg_int(r.parser)/8;
             rin.cmd_pending <= nsl_jtag.ate.ATE_OP_SHIFT;
             rin.state     <= ST_RSP_BSTR_HDR_PREP;
           elsif r.tag = 10 then
             nsl_simulation.logging.log_info("Running ATE_OP_RESET");
             rin.cmd_bit_count <= 0;
-            rin.word_count  <= nsl_data.cbor.arg(r.parser, 64);
+            rin.word_count  <= nsl_data.cbor.arg_int(r.parser);
             rin.cmd_pending <= nsl_jtag.ate.ATE_OP_RESET;
             rin.state       <= ST_ATE_RUN;
           elsif r.tag = 11 then -- run for ms
             nsl_simulation.logging.log_info("Running ATE_OP_RTI for " & nsl_data.text.to_string(nsl_data.cbor.arg_int(r.parser)) & "ms");
-            rin.word_count  <= to_unsigned(nsl_data.cbor.arg_int(r.parser) * 1000/clock_i_hz_c, 64 ); -- need tick speed here!!
+            nsl_simulation.logging.log_info("tick_i_hz_c : " & nsl_data.text.to_string(tick_i_hz_c) & " Hz");
+            nsl_simulation.logging.log_info("word count set to " & nsl_data.text.to_string(nsl_data.cbor.arg_int(r.parser) * tick_i_hz_c / 1000));
+            rin.word_count  <= nsl_data.cbor.arg_int(r.parser) * tick_i_hz_c / 2000;
+            rin.cmd_bit_count <= 0;
+            rin.cmd_pending <= nsl_jtag.ate.ATE_OP_RTI;
             rin.state       <= ST_ATE_RUN;
           end if;
 
         elsif nsl_data.cbor.kind(r.parser) = nsl_data.cbor.KIND_BSTR then
           nsl_simulation.logging.log_info("Running ATE_OP_SHIFT with BSTR of length " & nsl_data.text.to_string(nsl_data.cbor.arg(r.parser, 64)));
-          rin.word_count  <= nsl_data.cbor.arg(r.parser, 64);
+          rin.word_count  <= nsl_data.cbor.arg_int(r.parser);
           rin.cmd_pending <= nsl_jtag.ate.ATE_OP_SHIFT;
           if r.has_tdo then
             nsl_simulation.logging.log_info("No TDO");
@@ -335,8 +349,9 @@ begin
       when ST_ATE_WAIT_FOR_DONE => 
         if s_cmd_ready = '1' then
           if r.word_count /= 0 then
-            rin.word_count <= (r.word_count - 1);
+            rin.word_count <= r.word_count - 1;
             rin.state <= ST_ATE_RUN;
+            nsl_simulation.logging.log_info("in ST_ATE_WAIT_FOR_DONE with r.word_count = " & nsl_data.text.to_string(r.word_count) & ", going back to ST_ATE_RUN");
           else
             rin.state <= ST_CMD_END;
           end if;
@@ -351,12 +366,12 @@ begin
         if r.has_tdi then
           if cmd_i.valid = '1' then
             rin.cmd_data <= cmd_i.data(0);
-            rin.word_count <= (r.word_count - 1);
+            rin.word_count <= r.word_count - 1;
             rin.state <= ST_DATA_RUN;
           end if;
         else
           rin.cmd_data <= (others => '0');
-          rin.word_count <= (r.word_count - 1);
+          rin.word_count <= r.word_count - 1;
           rin.state <= ST_DATA_RUN;
         end if;
 
@@ -395,7 +410,7 @@ begin
           rin.state <= ST_RSP_ARRAY_HDR_PUT;
           rin.last  <= false;
           nsl_data.bytestream.clear(s => cbr_encoded);
-          
+
       when ST_RSP_ARRAY_HDR_PUT =>
           if rsp_i.ready = '1' then
             if r.encoded_len - 1 = r.encoded_i then
@@ -408,7 +423,7 @@ begin
           end if;
 
       when ST_RSP_BSTR_HDR_PREP =>
-          nsl_data.bytestream.write(s => cbr_encoded, d => nsl_data.cbor.cbor_bstr_hdr(length => to_integer(r.word_count)));
+          nsl_data.bytestream.write(s => cbr_encoded, d => nsl_data.cbor.cbor_bstr_hdr(length => r.word_count));
           rin.encoded_len <= cbr_encoded.all'length;
           rin.encoded(cbr_encoded.all'length-1 downto 0) <= cbr_encoded.all;
           nsl_data.bytestream.clear(s => cbr_encoded);
@@ -439,9 +454,6 @@ begin
 
     end case;
   end process;
-
-  s_cmd_op <= r.cmd_pending;
-  s_cmd_data <= r.cmd_data;
 
   moore: process (r)
   begin
@@ -480,7 +492,7 @@ begin
     when ST_RSP_ARRAY_HDR_PREP | ST_RSP_BSTR_HDR_PREP | ST_RSP_BREAK_PREP =>
 
     when ST_ATE_WAIT_FOR_DONE | ST_DATA_GET_RSP =>
-        s_rsp_ready <= '1';
+      s_rsp_ready <= '1';
     
     when ST_RSP_ARRAY_HDR_PUT | ST_RSP_BSTR_HDR_PUT =>
       rsp_o <= nsl_amba.axi4_stream.transfer( cfg => axi_s_cfg_c, bytes => r.encoded(r.encoded_len - r.encoded_i - 1 downto r.encoded_len - r.encoded_i - 1), last => r.last);
@@ -501,8 +513,8 @@ begin
 
       cmd_ready_o   => s_cmd_ready,
       cmd_valid_i   => s_cmd_valid,
-      cmd_op_i      => s_cmd_op,
-      cmd_data_i    => s_cmd_data,
+      cmd_op_i      => r.cmd_pending,
+      cmd_data_i    => r.cmd_data,
       cmd_size_m1_i => r.cmd_bit_count,
 
       rsp_ready_i => s_rsp_ready,
