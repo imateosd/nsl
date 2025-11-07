@@ -45,7 +45,8 @@ begin
   
   dut: nsl_spi.cbor_transactor.controller
     generic map(
-      system_clock_c => 1000000,
+      clock_i_hz_c   => 10e7,
+      tick_i_hz_c    => 10e7/to_integer(tick_divisor),
       axi_s_cfg_c    => cfg_c,
       slave_count_c  => 2
       )
@@ -72,9 +73,7 @@ begin
   miso_s <= nsl_io.io.to_logic(spi_slave_s.o.miso) when cs_s_n(0).drain_n = '0' else
             nsl_io.io.to_logic(mosi_s)             when cs_s_n(1).drain_n = '0' else
             'Z';
-
-  
-  
+    
   slave: nsl_spi.slave.spi_memory_controller
     generic map(
       addr_bytes_c   => addr_byte_cnt,

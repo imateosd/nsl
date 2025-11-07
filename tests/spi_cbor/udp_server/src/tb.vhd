@@ -40,9 +40,11 @@ begin
 
   dut: nsl_spi.cbor_transactor.controller
     generic map(
-      system_clock_c => 1000000,
+      clock_i_hz_c   => 10e7,
+      tick_i_hz_c    => 10e7/to_integer(tick_divisor),
       axi_s_cfg_c    => cfg_c,
-      slave_count_c  => 1
+      slave_count_c  => 1,
+      width_c        => 7
       )
     port map(
       clock_i        => s_clk,

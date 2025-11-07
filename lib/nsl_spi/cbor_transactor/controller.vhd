@@ -8,8 +8,10 @@ use nsl_data.cbor.all;
 entity controller is
   generic(
     clock_i_hz_c  : natural;
+    tick_i_hz_c   : natural;
     axi_s_cfg_c   : nsl_amba.axi4_stream.config_t;
-    slave_count_c : natural range 1 to 7 := 1
+    slave_count_c : natural range 1 to 7 := 1;
+    width_c       : natural := 7-- TODO what should the range be here?
     );
   port(
     clock_i   : in std_ulogic;
@@ -62,12 +64,11 @@ architecture rtl of controller is
   
  type regs_t is record
     state               : state_t;
-    cmd                 : std_ulogic_vector(7 downto 0);
+
     shreg               : std_ulogic_vector(7 downto 0);
     word_count          : natural range 0 to 512;
     selected            : natural range 0 to 7;
-    bit_count, width_m1 : natural range 0 to 7;
-    insertion_mask      : std_ulogic_vector(0 to 7);
+    bit_count           : natural range 0 to 7;
     
     mosi                : std_ulogic;
     cpol                : std_ulogic;
@@ -78,19 +79,32 @@ architecture rtl of controller is
                                                         -- r.minus holds the number of bits that must be shifted on the last word
 
     parser              : nsl_data.cbor.parser_t;
-    tag                 : natural range 0 to 11;
-    last                : boolean;
-    command_count       : unsigned(31 downto 0);
+    tag                 : natural range 0 to 11; 
+    command_count       : natural range 0 to 1023;
     indefinite          : boolean;
+    inside_cmd          : boolean;
+    
     encoded             : nsl_data.bytestream.byte_string(8 downto 0);
     encoded_len         : natural range 0 to 8;
     encoded_i           : natural range 0 to 8;
-    inside_cmd          : boolean;
+    last                : boolean;
   end record;
 
   signal r, rin: regs_t;
     
 begin
+  
+  assert nsl_amba.axi4_stream.byte_count(axi_s_cfg_c, cmd_i) = 1
+    report "AXI-Stream bad data length, must be 1 byte"
+    severity failure;
+  
+  assert axi_s_cfg_c.has_last = true
+    report "AXI-Stream configuration incorrect, must have TLAST"
+    severity failure;
+  
+  assert axi_s_cfg_c.has_ready = true
+    report "AXI-Stream configuration incorrect, must have TREADY"
+    severity failure;
   
   regs: process(reset_n_i, clock_i)
   begin
@@ -111,12 +125,27 @@ begin
     
     case r.state is
       when ST_RESET =>
-        rin.state          <= ST_ARRAY_GET;
-        rin.selected       <= slave_count_c;
-        rin.width_m1       <= 7;
-        rin.insertion_mask <= (7 => '1', others => '0');
-        rin.cpol           <= '0';
-        rin.cpha           <= '0';
+        rin.state         <= ST_ARRAY_GET;
+        rin.selected      <= slave_count_c;
+        rin.cpol          <= '0';
+        rin.cpha          <= '0';
+        rin.mosi          <= '0';
+        rin.has_mosi      <= true;
+        rin.has_miso      <= true;
+        
+        rin.shreg         <= (others => '-');
+        
+        rin.minus         <= 0;
+        rin.tag           <= 0;
+        rin.parser        <= nsl_data.cbor.reset;
+        rin.indefinite    <= false;
+        rin.inside_cmd    <= false;
+
+        rin.word_count    <= 0;
+        rin.command_count <= 0;
+        rin.encoded_len   <= 0;
+        rin.encoded_i     <= 0;
+        rin.last          <= false;
 
       when ST_ARRAY_GET =>
         if cmd_i.valid = '1' then
@@ -130,8 +159,8 @@ begin
       when ST_ARRAY_ENTER =>
         if nsl_data.cbor.kind(r.parser) = nsl_data.cbor.KIND_ARRAY then
           if not r.parser.indefinite then
-            nsl_simulation.logging.log_info("r.command_count set to " & nsl_data.text.to_string(nsl_data.cbor.arg(r.parser, 32)));
-            rin.command_count <= nsl_data.cbor.arg(r.parser, 32);
+            nsl_simulation.logging.log_info("r.command_count set to " & nsl_data.text.to_string(nsl_data.cbor.arg_int(r.parser)));
+            rin.command_count <= nsl_data.cbor.arg_int(r.parser);
             rin.indefinite    <= false;
           else
             rin.indefinite    <= true;
@@ -186,7 +215,7 @@ begin
             if nsl_data.cbor.arg_int(r.parser)/8 = 0 and r.minus /= 0 then
               rin.bit_count <= r.minus - 1;
             else 
-              rin.bit_count <= r.width_m1;
+              rin.bit_count <= width_c;
             end if;
           elsif r.tag = 10 then -- 'pause'
             rin.shreg <= (others => '0');
@@ -257,14 +286,14 @@ begin
 
       when ST_DATA_GET =>
         if cmd_i.valid = '1' then
-          rin.mosi <= cmd_i.data(0)(r.width_m1);
+          rin.mosi <= cmd_i.data(0)(width_c);
           rin.shreg <= cmd_i.data(0);
           rin.state <= ST_SHIFT_FIRST_HALF;
           -- prepare SHIFT_OUT or SHIFT_IO
           if r.word_count = 0 and r.minus /= 0 then
             rin.bit_count <= r.minus - 1;
           else
-            rin.bit_count <= r.width_m1;
+            rin.bit_count <= width_c;
           end if;
         end if;
         
@@ -290,12 +319,12 @@ begin
           if r.bit_count /= 0 then
             rin.bit_count <= r.bit_count - 1;
           else
-            rin.bit_count <= r.width_m1;
+            rin.bit_count <= width_c;
           end if;
 
           if r.bit_count /= 0 then
             if r.has_mosi then
-              rin.mosi <= r.shreg(r.width_m1);
+              rin.mosi <= r.shreg(width_c);
             else
               rin.mosi <= '0';
             end if;
@@ -303,7 +332,7 @@ begin
           else
             if r.word_count /= 0 then
               rin.word_count <= r.word_count - 1;
-              rin.bit_count <= r.width_m1;
+              rin.bit_count <= width_c;
               if r.word_count = 1 and r.minus /= 0 then
                 rin.bit_count <= r.minus - 1;
               end if;
