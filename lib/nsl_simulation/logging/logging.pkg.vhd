@@ -12,15 +12,15 @@ package logging is
     );
 
   type log_color_t is (
-    LOG_COLOR_BLACK,      -- Black 	30
-    LOG_COLOR_RED,           -- Red 	  31
-    LOG_COLOR_GREEN,     -- Green 	32
-    LOG_COLOR_YELLOW,  -- Yellow 	33
-    LOG_COLOR_BLUE,        -- Blue 	  34
+    LOG_COLOR_BLACK,   -- Black   30
+    LOG_COLOR_RED,     -- Red 	  31
+    LOG_COLOR_GREEN,   -- Green   32
+    LOG_COLOR_YELLOW,  -- Yellow  33
+    LOG_COLOR_BLUE,    -- Blue 	  34
     LOG_COLOR_MAGENTA, -- Magenta 35
-    LOG_COLOR_CYAN,           -- Cyan 	  36
-    LOG_COLOR_WHITE         -- White 	37
-    );                                               -- Default 39
+    LOG_COLOR_CYAN,    -- Cyan 	  36
+    LOG_COLOR_WHITE    -- White   37
+    );                 -- Default 39
   
   function to_string(level : log_level_t) return string;
 
@@ -77,47 +77,47 @@ package body logging is
   begin
       case color is
         when LOG_COLOR_BLACK =>
-          nsl_simulation.logging.log(level => level, message => character'val(27) & "[30m" & message & character'val(27) & "[0m");
+          nsl_simulation.logging.log(level => level, message => ESC & "[30m" & message & ESC & "[0m" );
         when LOG_COLOR_RED =>
-          nsl_simulation.logging.log(level => level, message => character'val(27) & "[31m" & message & character'val(27) & "[0m");
+          nsl_simulation.logging.log(level => level, message => ESC & "[31m" & message & ESC & "[0m" );
         when LOG_COLOR_GREEN =>
-          nsl_simulation.logging.log(level => level, message => character'val(27) & "[32m" & message & character'val(27) & "[0m");
+          nsl_simulation.logging.log(level => level, message => ESC & "[32m" & message & ESC & "[0m" );
         when LOG_COLOR_YELLOW =>
-          nsl_simulation.logging.log(level => level, message => character'val(27) & "[33m" & message & character'val(27) & "[0m");
+          nsl_simulation.logging.log(level => level, message => ESC & "[33m" & message & ESC & "[0m" );
         when LOG_COLOR_BLUE =>
-          nsl_simulation.logging.log(level => level, message => character'val(27) & "[34m" & message & character'val(27) & "[0m");
+          nsl_simulation.logging.log(level => level, message => ESC & "[34m" & message & ESC & "[0m" );
         when LOG_COLOR_MAGENTA =>
-          nsl_simulation.logging.log(level => level, message => character'val(27) & "[35m" & message & character'val(27) & "[0m");
+          nsl_simulation.logging.log(level => level, message => ESC & "[35m" & message & ESC & "[0m" );
         when LOG_COLOR_CYAN =>
-          nsl_simulation.logging.log(level => level, message => character'val(27) & "[36m" & message & character'val(27) & "[0m");
+          nsl_simulation.logging.log(level => level, message => ESC & "[36m" & message & ESC & "[0m" );
         when LOG_COLOR_WHITE =>
-          nsl_simulation.logging.log(level => level, message => character'val(27) & "[37m" & message & character'val(27) & "[0m");
+          nsl_simulation.logging.log(level => level, message => ESC & "[37m" & message & ESC & "[0m" );
       end case;
     end procedure;
   
   procedure log_debug(message : string) is
   begin
-    log(LOG_LEVEL_DEBUG, message);
+    log(LOG_LEVEL_DEBUG, message, LOG_COLOR_WHITE);
   end procedure;
 
   procedure log_info(message : string) is
   begin
-    log(LOG_LEVEL_INFO, message);
+    log(LOG_LEVEL_INFO, message, LOG_COLOR_BLUE);
   end procedure;
 
   procedure log_warning(message : string) is
   begin
-    log(LOG_LEVEL_WARNING, message);
+    log(LOG_LEVEL_WARNING, message, LOG_COLOR_YELLOW);
   end procedure;
 
   procedure log_error(message : string) is
   begin
-    log(LOG_LEVEL_ERROR, message);
+    log(LOG_LEVEL_ERROR, message, LOG_COLOR_RED);
   end procedure;
 
   procedure log_fatal(message : string) is
   begin
-    log(LOG_LEVEL_FATAL, message);
+    log(LOG_LEVEL_FATAL, message, LOG_COLOR_RED);
   end procedure;
 
   procedure log_debug(context: log_context; message : string) is
