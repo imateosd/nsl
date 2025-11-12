@@ -66,7 +66,7 @@ architecture rtl of controller is
     state               : state_t;
 
     shreg               : std_ulogic_vector(7 downto 0);
-    word_count          : natural range 0 to 512;
+    word_count          : natural range 0 to 4095;
     selected            : natural range 0 to 7;
     bit_count           : natural range 0 to 7;
     
@@ -91,7 +91,42 @@ architecture rtl of controller is
   end record;
 
   signal r, rin: regs_t;
-    
+
+  constant c_print_logs : boolean := False;
+  
+  function state_to_string(s : state_t) return string is
+  begin
+    case s is
+      when ST_RESET                => return "ST_RESET";
+        when ST_ARRAY_GET          => return "ST_ARRAY_GET";
+        when ST_ARRAY_ENTER        => return "ST_ARRAY_ENTER";
+        when ST_CMD_GET            => return "ST_CMD_GET";
+        when ST_CMD_EXEC           => return "ST_CMD_EXEC";
+        when ST_CMD_END            => return "ST_CMD_END";
+        when ST_CMD_GET_CS         => return "ST_CMD_GET_CS";
+        when ST_CMD_GET_MODE       => return "ST_CMD_GET_MODE";
+        when ST_DATA_GET           => return "ST_DATA_GET";
+        when ST_SELECTED_PRE       => return "ST_SELECTED_PRE";
+        when ST_SELECTED_POST      => return "ST_SELECTED_POST";
+        when ST_SHIFT_FIRST_HALF   => return "ST_SHIFT_FIRST_HALF";
+        when ST_SHIFT_SECOND_HALF  => return "ST_SHIFT_SECOND_HALF";
+        when ST_DATA_PUT           => return "ST_DATA_PUT";
+        when ST_RSP_ARRAY_HDR_PREP => return "ST_RSP_ARRAY_HDR_PREP";
+        when ST_RSP_ARRAY_HDR_PUT  => return "ST_RSP_ARRAY_HDR_PUT";
+        when ST_RSP_BSTR_HDR_PREP  => return "ST_RSP_BSTR_HDR_PREP";
+        when ST_RSP_BSTR_HDR_PUT   => return "ST_RSP_BSTR_HDR_PUT";
+        when ST_RSP_BREAK_PREP     => return "ST_RSP_BREAK_PREP";
+        when ST_RSP_BREAK_PUT      => return "ST_RSP_BREAK_PUT";
+    end case;
+  end;
+  
+  procedure log_state_change(r : regs_t; rin: regs_t) is  begin
+    if c_print_logs then
+      nsl_simulation.logging.log_info("In " & state_to_string(r.state) & " => " & state_to_string(rin.state) & LF );
+    end if;
+  end procedure;
+
+  
 begin
   
   assert nsl_amba.axi4_stream.byte_count(axi_s_cfg_c, cmd_i) = 1
@@ -110,6 +145,10 @@ begin
   begin
     if rising_edge(clock_i) then
       r <= rin;
+      if rin.state = r.state then
+      else
+        log_state_change(r => r, rin => rin);
+      end if;
     end if;
     if reset_n_i = '0' then
       r.state <= ST_RESET;
@@ -210,7 +249,7 @@ begin
           if r.tag = 8 then -- SHIFT_IN (no MOSI)
             rin.shreg <= (others => '0');
             rin.mosi <= '0';
-            rin.word_count <= nsl_data.cbor.arg_int(r.parser)/8;
+            rin.word_count <= nsl_data.cbor.arg_int(r.parser)/8 - 1;
             rin.state      <= ST_RSP_BSTR_HDR_PREP;
             if nsl_data.cbor.arg_int(r.parser)/8 = 0 and r.minus /= 0 then
               rin.bit_count <= r.minus - 1;
@@ -225,7 +264,7 @@ begin
               rin.word_count <= 0;
             else
               rin.bit_count <=  nsl_data.cbor.arg_int(r.parser) mod 8;
-              rin.word_count <= nsl_data.cbor.arg_int(r.parser)/8;
+              rin.word_count <= nsl_data.cbor.arg_int(r.parser)/8 - 1;
               rin.state      <= ST_SHIFT_FIRST_HALF;
             end if;
           end if;
