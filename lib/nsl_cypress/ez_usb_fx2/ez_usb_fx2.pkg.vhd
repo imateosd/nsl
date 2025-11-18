@@ -1,0 +1,137 @@
+library ieee;
+use ieee.std_logic_1164.all;
+use ieee.numeric_std.all;
+
+library nsl_amba;
+
+-- todo rethink names
+-- todo make types
+
+package ez_usb_fx2 is
+
+  constant fx2_data_width_c : natural := 8;
+  
+  constant fx2_ep2_addr_c : std_ulogic_vector(1 downto 0) := "00";
+  constant fx2_ep4_addr_c : std_ulogic_vector(1 downto 0) := "01";
+  constant fx2_ep6_addr_c : std_ulogic_vector(1 downto 0) := "10";
+  constant fx2_ep8_addr_c : std_ulogic_vector(1 downto 0) := "11";
+
+  type fx2_ep_t is (
+    FX2_EP2,
+    FX2_EP4,
+    FX2_EP6,
+    FX2_EP8
+    );
+
+  subtype fx2_addr_t is std_ulogic_vector(1 downto 0);
+  function get_fifoaddr(ep: fx2_ep_t) return fx2_addr_t;  
+  
+  type fx2_o is record
+    full_n  : std_ulogic;
+    empty_n : std_ulogic;
+    data    : std_ulogic_vector(fx2_data_width_c-1 downto 0);
+  end record;
+
+  type fx2_i is record
+    addr   : std_ulogic_vector(1 downto 0);
+    wr_n   : std_ulogic;
+    rd_n   : std_ulogic;
+    oe_n   : std_ulogic;
+    data   : std_ulogic_vector(fx2_data_width_c-1 downto 0);
+    pktend : std_ulogic;
+  end record;
+
+  type fx2_rd_i is record
+    addr   : std_ulogic_vector(1 downto 0);
+    rd_n   : std_ulogic;
+    oe_n   : std_ulogic;
+  end record;
+
+  type fx_wr_i is record
+    addr   : std_ulogic_vector(1 downto 0);
+    wr_n   : std_ulogic;
+    oe_n   : std_ulogic;
+    data   : std_ulogic_vector(fx2_data_width_c-1 downto 0);
+    pktend : std_ulogic;
+  end record;
+  
+  type fx2_io is record
+    o : fx2_o;
+    i : fx2_i;
+  end record;
+    
+  component fx2_controller is
+    generic(
+      axi_cfg_c : nsl_amba.axi4_stream.config_t;
+      rx_ep_c : fx2_ep_t := FX2_EP2;
+      tx_ep_c : fx2_ep_t := FX2_EP6   
+      );
+    port(
+      clock_i      : in std_ulogic;
+      reset_n_i    : in std_ulogic;
+      
+      tx_i  : in nsl_amba.axi4_stream.master_t;
+      tx_o  : out nsl_amba.axi4_stream.slave_t;
+      
+      rx_o  : out nsl_amba.axi4_stream.master_t;
+      rx_i  : in nsl_amba.axi4_stream.slave_t;
+
+      to_fx2_o   : out fx2_i;
+      from_fx2_i : in fx2_o     
+      );
+  end component;
+    
+  component fx2_to_axi4_stream is
+    generic(
+      axi_cfg_c : nsl_amba.axi4_stream.config_t;
+      ep_c : fx2_ep_t := FX2_EP2
+      );
+    port(
+      clock_i   : in std_ulogic;
+      reset_n_i : in std_ulogic;
+      
+      rx_o : out nsl_amba.axi4_stream.master_t;
+      rx_i : in nsl_amba.axi4_stream.slave_t;
+
+      to_fx2_o   : out fx2_i;
+      from_fx2_i : in fx2_o     
+      );
+  end component;
+    
+  component axi4_stream_to_fx2 is
+    generic(
+      axi_cfg_c : nsl_amba.axi4_stream.config_t;
+      ep_c : fx2_ep_t := FX2_EP6   
+      );
+    port(
+      clock_i   : in std_ulogic;
+      reset_n_i : in std_ulogic;
+      
+      tx_i : in nsl_amba.axi4_stream.master_t;
+      tx_o : out nsl_amba.axi4_stream.slave_t;
+
+      to_fx2_o   : out fx2_i;
+      from_fx2_i : in fx2_o
+      );
+  end component;
+    
+end ez_usb_fx2;
+
+package body ez_usb_fx2 is
+  
+  function get_fifoaddr(ep: fx2_ep_t) return fx2_addr_t
+  is
+  begin
+    case ep is
+      when FX2_EP2 =>
+        return fx2_ep2_addr_c;
+      when FX2_EP4 =>
+        return fx2_ep4_addr_c;
+      when FX2_EP6 =>
+        return fx2_ep6_addr_c;
+      when FX2_EP8 =>
+        return fx2_ep8_addr_c;
+    end case;
+  end function;
+
+end package body ez_usb_fx2;
