@@ -12,7 +12,7 @@ int run_command(const struct vhpidirect_array*);
 
 int run_command(const struct vhpidirect_array *data) {
   size_t data_len = data->range->len;
-  const char *cmd = data->data; // Add null termination
+  const char *cmd = data->data;
 
   if (data_len > 0) {
     return system(cmd);
