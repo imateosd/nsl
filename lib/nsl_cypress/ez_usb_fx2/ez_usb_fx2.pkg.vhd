@@ -23,6 +23,13 @@ package ez_usb_fx2 is
     FX2_EP8
     );
 
+  type fx2_flag_t is (
+    FX2_FLAGA,
+    FX2_FLAGB,
+    FX2_FLAGC,
+    FX2_FLAGD
+    );
+
   subtype fx2_addr_t is std_ulogic_vector(1 downto 0);
   function get_fifoaddr(ep: fx2_ep_t) return fx2_addr_t;  
   
@@ -33,33 +40,53 @@ package ez_usb_fx2 is
   end record;
 
   type fx2_i is record
-    addr   : std_ulogic_vector(1 downto 0);
-    wr_n   : std_ulogic;
-    rd_n   : std_ulogic;
-    oe_n   : std_ulogic;
-    data   : std_ulogic_vector(fx2_data_width_c-1 downto 0);
-    pktend : std_ulogic;
+    addr    : std_ulogic_vector(1 downto 0);
+    wr_n    : std_ulogic;
+    rd_n    : std_ulogic;
+    oe_n    : std_ulogic;
+    data    : std_ulogic_vector(fx2_data_width_c-1 downto 0);
+    pktend  : std_ulogic;
   end record;
 
+  type fx2_OUTep_o is record
+    empty_n : std_ulogic;
+    data    : std_ulogic_vector(fx2_data_width_c-1 downto 0);
+  end record;
+    
+  type fx2_INep_o is record
+    full_n  : std_ulogic;
+    data    : std_ulogic_vector(fx2_data_width_c-1 downto 0);
+  end record;
+
+  type fx2_flags_o is record
+    flag_a : std_ulogic;
+    flag_b : std_ulogic;
+    flag_c : std_ulogic;
+    flag_d : std_ulogic;
+    data   : std_ulogic_vector(fx2_data_width_c-1 downto 0);
+  end record;
+     
   type fx2_rd_i is record
-    addr   : std_ulogic_vector(1 downto 0);
-    rd_n   : std_ulogic;
-    oe_n   : std_ulogic;
+    addr    : std_ulogic_vector(1 downto 0);
+    rd_n    : std_ulogic;
+    oe_n    : std_ulogic;
   end record;
 
   type fx_wr_i is record
-    addr   : std_ulogic_vector(1 downto 0);
-    wr_n   : std_ulogic;
-    oe_n   : std_ulogic;
-    data   : std_ulogic_vector(fx2_data_width_c-1 downto 0);
-    pktend : std_ulogic;
+    addr    : std_ulogic_vector(1 downto 0);
+    wr_n    : std_ulogic;
+    oe_n    : std_ulogic;
+    data    : std_ulogic_vector(fx2_data_width_c-1 downto 0);
+    pktend  : std_ulogic;
   end record;
   
   type fx2_io is record
     o : fx2_o;
     i : fx2_i;
   end record;
-    
+
+  -- Controller designed to interface with EZ-USB-FX2 configured in Slave FIFOs
+  -- mode, with synchronous R/W and flags configured in indexed mode.
   component fx2_controller is
     generic(
       axi_cfg_c : nsl_amba.axi4_stream.config_t;
@@ -80,7 +107,34 @@ package ez_usb_fx2 is
       from_fx2_i : in fx2_o     
       );
   end component;
+
+  -- Controller designed to interface with EZ-USB-FX2 configured in Slave FIFOs
+  -- mode, with synchronous R/W and flags configured in fixed mode.
+  component fx2_controller_fixed is
+    generic(
+      axi_cfg_c       : nsl_amba.axi4_stream.config_t;
+      rx_ep_c         : fx2_ep_t   := FX2_EP2;
+      rx_empty_flag_c : fx2_flag_t := FX2_FLAGA;
+      tx_ep_c         : fx2_ep_t   := FX2_EP6;
+      tx_full_flag_c  : fx2_flag_t := FX2_FLAGB
+      );
+    port(
+      clock_i   : in std_ulogic;
+      reset_n_i : in std_ulogic;
+      
+      tx_i  : in nsl_amba.axi4_stream.master_t;
+      tx_o  : out nsl_amba.axi4_stream.slave_t;
+      
+      rx_o  : out nsl_amba.axi4_stream.master_t;
+      rx_i  : in nsl_amba.axi4_stream.slave_t;
+
+      to_fx2_o   : out fx2_i;
+      from_fx2_i : in fx2_flags_o
+      );
+  end component;
     
+  -- Controller designed to interface with EZ-USB-FX2 configured in Slave FIFOs
+  -- mode, with synchronous R and flags configured in indexed mode.
   component fx2_to_axi4_stream is
     generic(
       axi_cfg_c : nsl_amba.axi4_stream.config_t;
@@ -97,7 +151,9 @@ package ez_usb_fx2 is
       from_fx2_i : in fx2_o     
       );
   end component;
-    
+  
+  -- Controller designed to interface with EZ-USB-FX2 configured in Slave FIFOs
+  -- mode, with synchronous W and the flags configured in indexed mode.
   component axi4_stream_to_fx2 is
     generic(
       axi_cfg_c : nsl_amba.axi4_stream.config_t;
