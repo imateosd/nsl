@@ -40,10 +40,19 @@ architecture rtl of fx2_controller_fixed is
     ST_R_STATE1,
     ST_R_STATE2,
     ST_R_STATE3,
-    ST_R_STATE4
+    ST_R_STATE4,
+    ST_R_STATE5
+
     );
 
-  signal st, stin: state_t;
+  type regs_t is record
+    state   : state_t;
+    data    : std_ulogic_vector(7 downto 0);
+    -- last    : boolean;
+    -- empty_n : std_ulogic;
+    -- full_n  : std_ulogic;
+  end record;
+  signal r, rin: regs_t;
 
   signal rx_empty_n_s : std_ulogic;
   signal tx_full_n_s : std_ulogic;
@@ -68,19 +77,19 @@ begin
   regs: process(reset_n_i, clock_i)
   begin
     if rising_edge(clock_i) then
-      st <= stin;
+      r <= rin;
     end if;
     if reset_n_i = '0' then
-      st <= ST_RESET;
+      r.state <= ST_RESET;
     end if;
   end process;  
 
   -- TODO make work for other axi stream configurations!!  
-  transition: process(st, tx_i, rx_i, from_fx2_i, rx_empty_n_s, tx_full_n_s)
+  transition: process(r, tx_i, rx_i, from_fx2_i, rx_empty_n_s, tx_full_n_s)
     -- variable received_bytes : nsl_data.bytestream.byte_string(nsl_amba.axi4_stream.byte_count(axi_cfg_c, tx_i)-1 downto 0);
     variable received_bytes : nsl_data.bytestream.byte_string(0 downto 0);
   begin
-    stin <= st;
+    rin <= r;
 
     to_fx2_o.addr <= nsl_cypress.ez_usb_fx2.get_fifoaddr(rx_ep_c);
     to_fx2_o.data <= (others => '-');
@@ -90,27 +99,28 @@ begin
     to_fx2_o.pktend <= '1';
     
     tx_o <= nsl_amba.axi4_stream.accept(axi_cfg_c, false);
+    -- tx_o <= nsl_amba.axi4_stream.accept(axi_cfg_c, nsl_logic.bool.to_boolean(tx_full_n_s));
     rx_o <= nsl_amba.axi4_stream.transfer_defaults(axi_cfg_c);
     
-    case st is
+    case r.state is
       when ST_RESET =>
-        stin <= ST_IDLE;
+        rin.state <= ST_IDLE;
 
       when ST_IDLE =>
         if nsl_amba.axi4_stream.is_valid(axi_cfg_c, tx_i) then
-          stin <= ST_W_STATE1;
+          rin.state <= ST_W_STATE1;
         elsif rx_empty_n_s = '1' and nsl_amba.axi4_stream.is_ready(axi_cfg_c, rx_i) then
-          stin <= ST_R_STATE1;
+          rin.state <= ST_R_STATE1;
         end if;
         
       when ST_W_STATE1 =>
         to_fx2_o.addr <= nsl_cypress.ez_usb_fx2.get_fifoaddr(tx_ep_c);
-        stin <= ST_W_STATE2;
+        rin.state <= ST_W_STATE2;
         
       when ST_W_STATE2 =>
         to_fx2_o.addr <= nsl_cypress.ez_usb_fx2.get_fifoaddr(tx_ep_c);
         if tx_full_n_s = '1' then
-          stin <= ST_W_STATE3;
+          rin.state <= ST_W_STATE3;
         end if;
         
       when ST_W_STATE3 =>
@@ -124,45 +134,51 @@ begin
         to_fx2_o.pktend <= nsl_logic.bool.to_logic(not nsl_amba.axi4_stream.is_last(axi_cfg_c, tx_i));
         to_fx2_o.wr_n <= '0';
         
-        stin <= ST_W_STATE4;
+        rin.state <= ST_W_STATE4;
         
       when ST_W_STATE4 =>
         to_fx2_o.addr <= nsl_cypress.ez_usb_fx2.get_fifoaddr(tx_ep_c);
         if nsl_amba.axi4_stream.is_valid(axi_cfg_c, tx_i) then
-          stin <= ST_W_STATE2;
+          rin.state <= ST_W_STATE2;
         else
-          stin <= ST_IDLE;
+          rin.state <= ST_IDLE;
         end if;
         
       when ST_R_STATE1 =>
         to_fx2_o.addr <= nsl_cypress.ez_usb_fx2.get_fifoaddr(rx_ep_c);
-        stin <= ST_R_STATE2;
+        rin.state <= ST_R_STATE2;
         
       when ST_R_STATE2 =>
         to_fx2_o.oe_n <= '0';
         if rx_empty_n_s = '1' then
-          stin <= ST_R_STATE3;
-        elsif nsl_amba.axi4_stream.is_valid(axi_cfg_c, tx_i) then
-          stin <= ST_W_STATE1;
+          rin.state <= ST_R_STATE3;
+        -- elsif nsl_amba.axi4_stream.is_valid(axi_cfg_c, tx_i) then
+        --   rin.state <= ST_W_STATE1;
         end if;
-        
+
       when ST_R_STATE3 =>
         to_fx2_o.oe_n <= '0';
-        rx_o <= nsl_amba.axi4_stream.transfer(cfg => axi_cfg_c,
-                                              bytes => nsl_data.bytestream.from_suv(from_fx2_i.data),
-                                              last => rx_empty_n_s = '0');
+        rin.data <= from_fx2_i.data;
         to_fx2_o.rd_n <= '0'; -- increment FIFO pointer
-
-        stin <= ST_R_STATE4;
-        
+        --rx_empty_n_s does not yet represent if this is the last byte
+        rin.state <= ST_R_STATE4;
+                
       when ST_R_STATE4 =>
         to_fx2_o.oe_n <= '0';
+        rx_o <= nsl_amba.axi4_stream.transfer(cfg => axi_cfg_c,
+                                              bytes => nsl_data.bytestream.from_suv(r.data),
+                                              last => rx_empty_n_s = '0');
+
+        if nsl_amba.axi4_stream.is_ready(axi_cfg_c, rx_i) then
+          rin.state <= ST_R_STATE5;
+        end if;
+        
+      when ST_R_STATE5 =>
+        to_fx2_o.oe_n <= '0';
         if nsl_amba.axi4_stream.is_ready(axi_cfg_c, rx_i) and rx_empty_n_s = '1' then
-          stin <= ST_R_STATE2;
-        elsif nsl_amba.axi4_stream.is_valid(axi_cfg_c, tx_i) then
-          stin <= ST_W_STATE1;
+          rin.state <= ST_R_STATE2;
         else
-          stin <= ST_IDLE;
+          rin.state <= ST_IDLE;
         end if;
       
     end case;
