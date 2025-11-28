@@ -132,6 +132,32 @@ package ez_usb_fx2 is
       from_fx2_i : in fx2_flags_o
       );
   end component;
+
+  -- Controller designed to interface with EZ-USB-FX2 configured in Slave FIFOs
+  -- mode, with synchronous R/W and flags configured in fixed mode.
+  -- Fastest version of fx2_controller_fixed
+  component fx2_controller_fixed_fast is
+    generic(
+      axi_cfg_c       : nsl_amba.axi4_stream.config_t;
+      rx_ep_c         : fx2_ep_t   := FX2_EP2;
+      rx_empty_flag_c : fx2_flag_t := FX2_FLAGA;
+      tx_ep_c         : fx2_ep_t   := FX2_EP6;
+      tx_full_flag_c  : fx2_flag_t := FX2_FLAGB
+      );
+    port(
+      clock_i   : in std_ulogic;
+      reset_n_i : in std_ulogic;
+      
+      tx_i  : in nsl_amba.axi4_stream.master_t;
+      tx_o  : out nsl_amba.axi4_stream.slave_t;
+      
+      rx_o  : out nsl_amba.axi4_stream.master_t;
+      rx_i  : in nsl_amba.axi4_stream.slave_t;
+
+      to_fx2_o   : out fx2_i;
+      from_fx2_i : in fx2_flags_o
+      );
+  end component;
     
   -- Controller designed to interface with EZ-USB-FX2 configured in Slave FIFOs
   -- mode, with synchronous R and flags configured in indexed mode.
