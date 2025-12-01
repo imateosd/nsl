@@ -129,7 +129,9 @@ package ez_usb_fx2 is
       rx_i  : in nsl_amba.axi4_stream.slave_t;
 
       to_fx2_o   : out fx2_i;
-      from_fx2_i : in fx2_flags_o
+      from_fx2_i : in fx2_flags_o;
+
+      addr_change_done_i : in std_ulogic := '1'
       );
   end component;
 
