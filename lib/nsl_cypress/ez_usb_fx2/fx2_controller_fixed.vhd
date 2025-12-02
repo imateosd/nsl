@@ -36,9 +36,10 @@ architecture rtl of fx2_controller_fixed is
   type state_t is (
     ST_RESET,
     ST_IDLE,
+    ST_ADDR_CHANGE1,
+    ST_ADDR_CHANGE2,
     ST_W_STATE1,
     ST_W_STATE2,
-    ST_W_STATE3,
     ST_R_STATE1,
     ST_R_STATE2,
     ST_R_STATE3
@@ -48,6 +49,7 @@ architecture rtl of fx2_controller_fixed is
     state   : state_t;
     data    : std_ulogic_vector(7 downto 0);
     last    : boolean;
+    addr    : fx2_addr_t;
   end record;
   signal r, rin: regs_t;
 
@@ -82,7 +84,7 @@ begin
   end process;  
 
   -- TODO make work for other axi stream configurations!!  
-  transition: process(r, tx_i, rx_i, from_fx2_i, rx_empty_n_s, tx_full_n_s)
+  transition: process(r, tx_i, rx_i, from_fx2_i, rx_empty_n_s, tx_full_n_s, addr_change_done_i)
     variable received_bytes : nsl_data.bytestream.byte_string(0 downto 0);
   begin
     rin <= r;
@@ -91,44 +93,54 @@ begin
       when ST_RESET =>
         rin.state <= ST_IDLE;
         rin.data <= (others => '-');
+        rin.last <= false;
+        -- rin.addr <= (others => '-');
 
       when ST_IDLE => -- Write has priority
         if tx_full_n_s = '1' and nsl_amba.axi4_stream.is_valid(axi_cfg_c, tx_i) then
           received_bytes := nsl_amba.axi4_stream.bytes(axi_cfg_c, tx_i);
           rin.data <= received_bytes(0);
           rin.last <= nsl_amba.axi4_stream.is_last(axi_cfg_c, tx_i);
-          rin.state <= ST_W_STATE1;
+          rin.addr  <= get_fifoaddr(tx_ep_c);
+          rin.state <= ST_ADDR_CHANGE1;
         elsif rx_empty_n_s = '1' and nsl_amba.axi4_stream.is_ready(axi_cfg_c, rx_i) then
+          rin.addr  <= get_fifoaddr(rx_ep_c);
+          rin.state <= ST_ADDR_CHANGE1;
+        end if;
+
+      when ST_ADDR_CHANGE1 =>
+        rin.state <= ST_ADDR_CHANGE2;
+
+      when ST_ADDR_CHANGE2 =>
+        if r.addr = get_fifoaddr(tx_ep_c) then
+          rin.state <= ST_W_STATE1;
+        elsif r.addr = get_fifoaddr(rx_ep_c) then
           rin.state <= ST_R_STATE1;
         end if;
         
-      when ST_W_STATE1 => -- Set FIFO address to point to EP6
+      when ST_W_STATE1 => -- Set FIFO address to point to EP6 and wait for
+                          -- address to be set
         if addr_change_done_i = '1' then
           rin.state <= ST_W_STATE2;
         end if;
         
       when ST_W_STATE2 => -- Write data to FX2 FD
-        rin.state <= ST_W_STATE3;
-        
-      when ST_W_STATE3 =>
         if tx_full_n_s = '1' and nsl_amba.axi4_stream.is_valid(axi_cfg_c, tx_i) then
           received_bytes := nsl_amba.axi4_stream.bytes(axi_cfg_c, tx_i);
-          rin.data <= received_bytes(0);
-          rin.last <= nsl_amba.axi4_stream.is_last(axi_cfg_c, tx_i);
-          rin.state <= ST_W_STATE2;
+          rin.data  <= received_bytes(0);
+          rin.last  <= nsl_amba.axi4_stream.is_last(axi_cfg_c, tx_i);
         else
           rin.state <= ST_IDLE;
         end if;
         
-      when ST_R_STATE1 =>
+      when ST_R_STATE1 => -- Set FIFO address to point to EP2 and wait for
+                          -- address to be set
         if addr_change_done_i = '1' then
-          if rx_empty_n_s = '1' then
-            rin.state <= ST_R_STATE2;
-          end if;
+          rin.state <= ST_R_STATE2;
         end if;
 
       when ST_R_STATE2 => -- data is read from RX EP, but rx_empty_n_s does not yet represent if this is the last byte
-        rin.data <= from_fx2_i.data;
+        rin.data  <= from_fx2_i.data;
         rin.state <= ST_R_STATE3;
                 
       when ST_R_STATE3 => -- write read data to rx_o, reading rx_empty_n_s to
@@ -147,7 +159,7 @@ begin
   moore: process (r)
     variable received_bytes : nsl_data.bytestream.byte_string(0 downto 0);
   begin
-    to_fx2_o.addr   <= "--";
+    to_fx2_o.addr   <= r.addr;
     to_fx2_o.data   <= (others => '-');
     to_fx2_o.wr_n   <= '1';
     to_fx2_o.rd_n   <= '1';
@@ -157,29 +169,19 @@ begin
     tx_o <= nsl_amba.axi4_stream.accept(axi_cfg_c, false);
     rx_o <= nsl_amba.axi4_stream.transfer_defaults(axi_cfg_c);
     
-    case r.state is
-      when ST_RESET =>
-      
+    case r.state is      
       when ST_IDLE => -- ready to write, priority to write
         tx_o <= nsl_amba.axi4_stream.accept(axi_cfg_c, tx_full_n_s = '1');
-      
-      when ST_W_STATE1 =>
+
+      when ST_RESET | ST_ADDR_CHANGE1 | ST_ADDR_CHANGE2 | ST_W_STATE1 | ST_R_STATE1 =>
       
       when ST_W_STATE2 =>
         to_fx2_o.pktend <= nsl_logic.bool.to_logic(not r.last);
         to_fx2_o.data   <= r.data;
+        to_fx2_o.wr_n   <= '0'; -- advance FIFO pointer
         
-        to_fx2_o.wr_n   <= '0';
-
-      when ST_W_STATE3 =>
         tx_o <= nsl_amba.axi4_stream.accept(axi_cfg_c, tx_full_n_s = '1');
-        
-        to_fx2_o.data   <= r.data; -- keep the data in the fifo bus for one
-                                   -- extra clock cycle after WR is asserted
 
-      
-      when ST_R_STATE1 =>
-            
       when ST_R_STATE2 => -- read is performed
         to_fx2_o.rd_n <= '0'; -- increment FIFO pointer
         to_fx2_o.oe_n <= '0';
@@ -192,17 +194,6 @@ begin
                                               last => rx_empty_n_s = '0');
         to_fx2_o.oe_n <= '0';
       
-    end case;
-
-    case r.state is
-      
-      when ST_W_STATE1 | ST_W_STATE2 | ST_W_STATE3 =>
-        to_fx2_o.addr <= get_fifoaddr(tx_ep_c);
-
-      when ST_R_STATE1 | ST_R_STATE2 | ST_R_STATE3 =>
-        to_fx2_o.addr <= get_fifoaddr(rx_ep_c);
-        
-      when others =>
     end case;
   end process;
 end architecture;
