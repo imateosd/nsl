@@ -112,11 +112,12 @@ package ez_usb_fx2 is
   -- mode, with synchronous R/W and flags configured in fixed mode.
   component fx2_controller_fixed is
     generic(
-      axi_cfg_c       : nsl_amba.axi4_stream.config_t;
-      rx_ep_c         : fx2_ep_t   := FX2_EP2;
-      rx_empty_flag_c : fx2_flag_t := FX2_FLAGA;
-      tx_ep_c         : fx2_ep_t   := FX2_EP6;
-      tx_full_flag_c  : fx2_flag_t := FX2_FLAGB
+      axi_cfg_c           : nsl_amba.axi4_stream.config_t;
+      rx_ep_c             : fx2_ep_t   := FX2_EP2;
+      rx_empty_flag_c     : fx2_flag_t := FX2_FLAGA;
+      tx_ep_c             : fx2_ep_t   := FX2_EP6;
+      tx_full_flag_c      : fx2_flag_t := FX2_FLAGB;
+      addr_change_delay_c : natural := 0
       );
     port(
       clock_i   : in std_ulogic;

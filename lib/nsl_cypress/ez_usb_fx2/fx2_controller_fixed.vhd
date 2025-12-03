@@ -8,11 +8,12 @@ use nsl_cypress.ez_usb_fx2.all;
 
 entity fx2_controller_fixed is
   generic(
-    axi_cfg_c       : nsl_amba.axi4_stream.config_t;
-    rx_ep_c         : nsl_cypress.ez_usb_fx2.fx2_ep_t   := nsl_cypress.ez_usb_fx2.FX2_EP2;
-    rx_empty_flag_c : nsl_cypress.ez_usb_fx2.fx2_flag_t := nsl_cypress.ez_usb_fx2.FX2_FLAGA;
-    tx_ep_c         : nsl_cypress.ez_usb_fx2.fx2_ep_t   := nsl_cypress.ez_usb_fx2.FX2_EP6;
-    tx_full_flag_c  : nsl_cypress.ez_usb_fx2.fx2_flag_t := nsl_cypress.ez_usb_fx2.FX2_FLAGB
+    axi_cfg_c           : nsl_amba.axi4_stream.config_t;
+    rx_ep_c             : nsl_cypress.ez_usb_fx2.fx2_ep_t   := nsl_cypress.ez_usb_fx2.FX2_EP2;
+    rx_empty_flag_c     : nsl_cypress.ez_usb_fx2.fx2_flag_t := nsl_cypress.ez_usb_fx2.FX2_FLAGA;
+    tx_ep_c             : nsl_cypress.ez_usb_fx2.fx2_ep_t   := nsl_cypress.ez_usb_fx2.FX2_EP6;
+    tx_full_flag_c      : nsl_cypress.ez_usb_fx2.fx2_flag_t := nsl_cypress.ez_usb_fx2.FX2_FLAGB;
+    addr_change_delay_c : natural := 0
     );
   port(
     clock_i    : in std_ulogic;
@@ -36,8 +37,7 @@ architecture rtl of fx2_controller_fixed is
   type state_t is (
     ST_RESET,
     ST_IDLE,
-    ST_ADDR_CHANGE1,
-    ST_ADDR_CHANGE2,
+    ST_WAIT_ADDR,
     ST_W_STATE1,
     ST_W_STATE2,
     ST_R_STATE1,
@@ -50,6 +50,7 @@ architecture rtl of fx2_controller_fixed is
     data    : std_ulogic_vector(7 downto 0);
     last    : boolean;
     addr    : fx2_addr_t;
+    count   : natural range 0 to addr_change_delay_c;
   end record;
   signal r, rin: regs_t;
 
@@ -102,22 +103,34 @@ begin
           rin.data <= received_bytes(0);
           rin.last <= nsl_amba.axi4_stream.is_last(axi_cfg_c, tx_i);
           rin.addr  <= get_fifoaddr(tx_ep_c);
-          rin.state <= ST_ADDR_CHANGE1;
+          if addr_change_delay_c = 0 then
+            rin.state <= ST_W_STATE1;
+          else
+            rin.count <= addr_change_delay_c;
+            rin.state <= ST_WAIT_ADDR;
+          end if;
         elsif rx_empty_n_s = '1' and nsl_amba.axi4_stream.is_ready(axi_cfg_c, rx_i) then
           rin.addr  <= get_fifoaddr(rx_ep_c);
-          rin.state <= ST_ADDR_CHANGE1;
+          rin.count <= addr_change_delay_c;
+          if addr_change_delay_c = 0 then
+            rin.state <= ST_R_STATE1;
+          else
+            rin.count <= addr_change_delay_c;
+            rin.state <= ST_WAIT_ADDR;
+          end if;
         end if;
 
-      when ST_ADDR_CHANGE1 =>
-        rin.state <= ST_ADDR_CHANGE2;
-
-      when ST_ADDR_CHANGE2 =>
-        if r.addr = get_fifoaddr(tx_ep_c) then
-          rin.state <= ST_W_STATE1;
-        elsif r.addr = get_fifoaddr(rx_ep_c) then
-          rin.state <= ST_R_STATE1;
+      when ST_WAIT_ADDR =>
+        if r.count = 0 then
+          if r.addr = get_fifoaddr(tx_ep_c) then
+            rin.state <= ST_W_STATE1;
+          elsif r.addr = get_fifoaddr(rx_ep_c) then
+            rin.state <= ST_R_STATE1;
+          end if;
+        else
+          rin.count <= r.count - 1;
         end if;
-        
+
       when ST_W_STATE1 => -- Set FIFO address to point to EP6 and wait for
                           -- address to be set
         if addr_change_done_i = '1' then
@@ -173,7 +186,7 @@ begin
       when ST_IDLE => -- ready to write, priority to write
         tx_o <= nsl_amba.axi4_stream.accept(axi_cfg_c, tx_full_n_s = '1');
 
-      when ST_RESET | ST_ADDR_CHANGE1 | ST_ADDR_CHANGE2 | ST_W_STATE1 | ST_R_STATE1 =>
+      when ST_RESET | ST_WAIT_ADDR | ST_W_STATE1 | ST_R_STATE1 =>
       
       when ST_W_STATE2 =>
         to_fx2_o.pktend <= nsl_logic.bool.to_logic(not r.last);
