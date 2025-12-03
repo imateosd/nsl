@@ -29,7 +29,9 @@ end entity;
 
 architecture rtl of controller is
   
-  constant data_max_size : natural := 8;
+  constant data_max_size_c    : natural := 8;
+  constant cbr_hdr_max_size_c : natural := 9;
+  constant buffer_cfg_c       : nsl_amba.axi4_stream.buffer_config_t := nsl_amba.axi4_stream.buffer_config(axi_s_cfg_c, cbr_hdr_max_size_c);
 
   type state_t is (
     ST_RESET,
@@ -62,7 +64,7 @@ architecture rtl of controller is
     state         : state_t;
     
     cmd_pending   : nsl_jtag.ate.ate_op;
-    cmd_bit_count : natural range 0 to data_max_size - 1;
+    cmd_bit_count : natural range 0 to data_max_size_c - 1;
     cmd_data      : std_ulogic_vector(7 downto 0);
     
     has_tdo       : boolean;
@@ -77,9 +79,7 @@ architecture rtl of controller is
     command_count : natural range 0 to 1023;
     inside_cmd    : boolean;
     
-    encoded       : nsl_data.bytestream.byte_string(8 downto 0);
-    encoded_len   : natural range 0 to 8;
-    encoded_i     : natural range 0 to 8;
+    encoded       : nsl_amba.axi4_stream.buffer_t;
     last          : boolean;
   end record;
 
@@ -90,44 +90,33 @@ architecture rtl of controller is
 
   signal s_rsp_ready    : std_ulogic;
   signal s_rsp_valid    : std_ulogic;
-  signal s_rsp_data     : std_ulogic_vector(data_max_size-1 downto 0);
+  signal s_rsp_data     : std_ulogic_vector(data_max_size_c-1 downto 0);
   
-  constant c_print_logs : boolean := true;
-
-  function to_fixed(s : string; len : natural) return string is
-    variable result : string(1 to len) := (others => ' ');
-  begin
-    if s'length <= len then
-      result(1 to s'length) := s;
-    else
-      result := s(1 to len);
-    end if;
-    return result;
-  end;
+  constant c_print_logs : boolean := false;
 
   function state_to_string(s : state_t) return string is
   begin
-    case s is
-      when ST_RESET              => return "ST_RESET";
-      when ST_ARRAY_GET          => return "ST_ARRAY_GET";
-      when ST_ARRAY_ENTER        => return "ST_ARRAY_ENTER";
-      when ST_CMD_GET            => return "ST_CMD_GET";
-      when ST_CMD_EXEC           => return "ST_CMD_EXEC";
-      when ST_CMD_END            => return "ST_CMD_END";
-      when ST_ATE_RUN            => return "ST_ATE_RUN";
-      when ST_ATE_WAIT_FOR_DONE  => return "ST_ATE_WAIT_FOR_DONE";
-      when ST_DATA_GET           => return "ST_DATA_GET";
-      when ST_DATA_RUN           => return "ST_DATA_RUN";
-      when ST_DATA_GET_RSP       => return "ST_DATA_GET_RSP";
-      when ST_DATA_PUT           => return "ST_DATA_PUT";
-      when ST_RSP_ARRAY_HDR_PREP => return "ST_RSP_ARRAY_HDR_PREP";
-      when ST_RSP_ARRAY_HDR_PUT  => return "ST_RSP_ARRAY_HDR_PUT";
-      when ST_RSP_BSTR_HDR_PREP  => return "ST_RSP_BSTR_HDR_PREP";
-      when ST_RSP_BSTR_HDR_PUT   => return "ST_RSP_BSTR_HDR_PUT";
-      when ST_RSP_BREAK_PREP     => return "ST_RSP_BREAK_PREP";
-      when ST_RSP_BREAK_PUT      => return "ST_RSP_BREAK_PUT";
-      when others                => return "UNKNOWN";
-    end case;
+   case s is
+     when ST_RESET              => return "ST_RESET";
+     when ST_ARRAY_GET          => return "ST_ARRAY_GET";
+     when ST_ARRAY_ENTER        => return "ST_ARRAY_ENTER";
+     when ST_CMD_GET            => return "ST_CMD_GET";
+     when ST_CMD_EXEC           => return "ST_CMD_EXEC";
+     when ST_CMD_END            => return "ST_CMD_END";
+     when ST_ATE_RUN            => return "ST_ATE_RUN";
+     when ST_ATE_WAIT_FOR_DONE  => return "ST_ATE_WAIT_FOR_DONE";
+     when ST_DATA_GET           => return "ST_DATA_GET";
+     when ST_DATA_RUN           => return "ST_DATA_RUN";
+     when ST_DATA_GET_RSP       => return "ST_DATA_GET_RSP";
+     when ST_DATA_PUT           => return "ST_DATA_PUT";
+     when ST_RSP_ARRAY_HDR_PREP => return "ST_RSP_ARRAY_HDR_PREP";
+     when ST_RSP_ARRAY_HDR_PUT  => return "ST_RSP_ARRAY_HDR_PUT";
+     when ST_RSP_BSTR_HDR_PREP  => return "ST_RSP_BSTR_HDR_PREP";
+     when ST_RSP_BSTR_HDR_PUT   => return "ST_RSP_BSTR_HDR_PUT";
+     when ST_RSP_BREAK_PREP     => return "ST_RSP_BREAK_PREP";
+     when ST_RSP_BREAK_PUT      => return "ST_RSP_BREAK_PUT";
+     when others                => return "UNKNOWN";
+   end case;
   end;
   
   procedure log_state_change(r : regs_t; rin: regs_t) is  begin
@@ -166,7 +155,6 @@ begin
 
   transition: process(cmd_i, r, rsp_i,
                       s_cmd_ready, s_rsp_data, s_rsp_valid)
-      variable cbr_encoded : nsl_data.bytestream.byte_stream;
   begin
     rin <= r;
 
@@ -185,9 +173,7 @@ begin
           rin.parser        <= nsl_data.cbor.reset;
           rin.indefinite    <= false;
           rin.command_count <= 0;
-          rin.encoded       <= (others => (others => '-') );
-          rin.encoded_len   <= 0;
-          rin.encoded_i     <= 0;
+          rin.encoded       <= nsl_amba.axi4_stream.reset(buffer_cfg_c);
           rin.last          <= false;
           rin.inside_cmd    <= false;
           rin.tag           <= 0;
@@ -236,7 +222,7 @@ begin
         if nsl_data.cbor.kind(r.parser) = nsl_data.cbor.KIND_TAG then
           rin.tag <= nsl_data.cbor.arg_int(r.parser);
           if nsl_data.cbor.arg_int(r.parser) > 0 and nsl_data.cbor.arg_int(r.parser) < 8 then -- minus
-            rin.bit_count  <= data_max_size - nsl_data.cbor.arg_int(r.parser) - 1;
+            rin.bit_count  <= data_max_size_c - nsl_data.cbor.arg_int(r.parser) - 1;
             rin.inside_cmd <= true;
             rin.state      <= ST_CMD_GET; -- going to get the bstr header
           elsif nsl_data.cbor.arg_int(r.parser) = 8 then -- SHIFT with no TDI
@@ -358,7 +344,7 @@ begin
         end if;
 
       when ST_DATA_GET =>
-        rin.cmd_bit_count <= data_max_size - 1;
+        rin.cmd_bit_count <= data_max_size_c - 1;
         if (r.word_count = 1) and (r.bit_count /= 0) then
           rin.cmd_bit_count <= r.bit_count;
         end if;
@@ -404,40 +390,30 @@ begin
         end if;
 
       when ST_RSP_ARRAY_HDR_PREP =>
-          nsl_data.bytestream.write(s => cbr_encoded, d => nsl_data.cbor.cbor_array_hdr(length => -1) );
-          rin.encoded_len <= cbr_encoded.all'length;
-          rin.encoded(cbr_encoded.all'length-1 downto 0) <= cbr_encoded.all;
+          rin.encoded <= nsl_amba.axi4_stream.reset(buffer_cfg_c, nsl_data.cbor.cbor_array_hdr(length => -1) );
           rin.state <= ST_RSP_ARRAY_HDR_PUT;
           rin.last  <= false;
-          nsl_data.bytestream.clear(s => cbr_encoded);
 
       when ST_RSP_ARRAY_HDR_PUT =>
           if rsp_i.ready = '1' then
-            if r.encoded_len - 1 = r.encoded_i then
+            if nsl_amba.axi4_stream.is_last(buffer_cfg_c, r.encoded) then
               rin.state <= ST_CMD_GET;
-              rin.encoded_len <= 0;
-              rin.encoded_i   <= 0;
-            else
-              rin.encoded_i <= (r.encoded_i + 1);
             end if;
+            rin.encoded <= nsl_amba.axi4_stream.shift(buffer_cfg_c, r.encoded);
           end if;
 
       when ST_RSP_BSTR_HDR_PREP =>
-          nsl_data.bytestream.write(s => cbr_encoded, d => nsl_data.cbor.cbor_bstr_hdr(length => r.word_count));
-          rin.encoded_len <= cbr_encoded.all'length;
-          rin.encoded(cbr_encoded.all'length-1 downto 0) <= cbr_encoded.all;
-          nsl_data.bytestream.clear(s => cbr_encoded);
+          -- rin.encoded <= nsl_amba.axi4_stream.reset(buffer_cfg_c, nsl_data.cbor.cbor_bstr_hdr(length => to_unsigned(r.word_count, 12), width => get_unsigned_width(r.word_count) ) ); --TODO
+          rin.encoded <= nsl_amba.axi4_stream.reset(buffer_cfg_c, nsl_data.cbor.cbor_bstr_hdr(length => to_unsigned(r.word_count, 12) ) ); --TODO          
           rin.state <= ST_RSP_BSTR_HDR_PUT;
+          rin.last  <= false;
 
       when ST_RSP_BSTR_HDR_PUT =>
           if rsp_i.ready = '1' then
-            if r.encoded_len - 1 = r.encoded_i then
+            if nsl_amba.axi4_stream.is_last(buffer_cfg_c, r.encoded) then
               rin.state <= ST_DATA_GET;
-              rin.encoded_len <= 0;
-              rin.encoded_i <= 0;
-            else
-              rin.encoded_i <= (r.encoded_i + 1);
             end if;
+            rin.encoded <= nsl_amba.axi4_stream.shift(buffer_cfg_c, r.encoded);
           end if;
           
       when ST_RSP_BREAK_PREP=>
@@ -495,14 +471,15 @@ begin
       s_rsp_ready <= '1';
     
     when ST_RSP_ARRAY_HDR_PUT | ST_RSP_BSTR_HDR_PUT =>
-      rsp_o <= nsl_amba.axi4_stream.transfer( cfg => axi_s_cfg_c, bytes => r.encoded(r.encoded_len - r.encoded_i - 1 downto r.encoded_len - r.encoded_i - 1), last => r.last);
+      -- rsp_o <= nsl_amba.axi4_stream.transfer( cfg => axi_s_cfg_c, bytes => r.encoded(r.encoded_len - r.encoded_i - 1 downto r.encoded_len - r.encoded_i - 1), last => r.last);
+      rsp_o <= nsl_amba.axi4_stream.next_beat(cfg => buffer_cfg_c, b => r.encoded, last => r.last);
 
   end case;
   end process;
 
   ate: nsl_jtag.ate.jtag_ate
     generic map (
-      data_max_size => data_max_size,
+      data_max_size => data_max_size_c,
       allow_pipelining => false
       )
     port map (
