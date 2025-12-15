@@ -30,6 +30,11 @@ entity controller is
 end entity;
 
 architecture beh of controller is
+
+    constant cbr_hdr_max_size_c   : natural := 9;
+    constant buffer_cfg_c         : nsl_amba.axi4_stream.buffer_config_t := nsl_amba.axi4_stream.buffer_config(axi_s_cfg_c, cbr_hdr_max_size_c);
+    constant clock_cycles_per_us_c : natural := clock_i_hz_c / 1000000;
+
   
     type state_t is (
         ST_RESET,
@@ -91,8 +96,7 @@ architecture beh of controller is
         ST_RSP_BREAK_PUT,
 
         ST_IO_FLUSH_GET,
-        ST_IO_FLUSH_PUT
-        
+        ST_IO_FLUSH_PUT        
     );
 
     type regs_t is record
@@ -109,9 +113,7 @@ architecture beh of controller is
         indefinite    : boolean;
         cmd_cancelled : boolean;        
 
-        encoded       : nsl_data.bytestream.byte_string(8 downto 0);
-        encoded_len   : natural range 0 to 8;
-        encoded_i     : natural range 0 to 8;
+        encoded       : nsl_amba.axi4_stream.buffer_t;
         last          : boolean;
         
         timeout       : natural; -- TODO: what should the limit be here?
@@ -146,7 +148,7 @@ architecture beh of controller is
 
     function state_to_string(s: state_t) return string is
     begin
-      case r.state is
+      case s is
         when ST_RESET              => return "ST_RESET";
         when ST_ARRAY_GET          => return "ST_ARRAY_GET";
         when ST_ARRAY_ENTER        => return "ST_ARRAY_ENTER";
@@ -289,7 +291,6 @@ begin
                           cmd_i, r, rsp_i,
                           shift_r_data_i, shift_r_valid_i, shift_w_ready_i,
                           shift_arb_ok_i)
-      variable cbr_encoded : nsl_data.bytestream.byte_stream;
     begin
       rin <= r;
 
@@ -311,9 +312,7 @@ begin
           rin.addr          <= (others => '-'); -- TODO: '0' or '-'?
           rin.data          <= (others => '-');
           rin.last          <= false;
-          rin.encoded       <= (others => (others => '-') );
-          rin.encoded_len   <= 0;
-          rin.encoded_i     <= 0;
+          rin.encoded       <= nsl_amba.axi4_stream.reset(buffer_cfg_c);
           rin.cmd_cancelled <= false;
           rin.timeout       <= 0;
           clr_timeout_cnt_s <= '0';
@@ -338,7 +337,7 @@ begin
             rin.parser <= nsl_data.cbor.reset;
             rin.state  <= ST_RSP_ARRAY_HDR_PREP;
           else 
-            -- rin.state <= ST_FLUSH; -- TODO ??
+            -- TODO ??
           end if;
 
         when ST_CMD_GET =>
@@ -455,7 +454,7 @@ begin
               if r.timeout = 0 then
                 rin.cmd_cancelled <= true;
                 rin.state <= ST_RSP_ANACK_PREP;
-              else
+              else -- timeout is still going
                 rin.state <= ST_STOP;
               end if;
             end if;
@@ -558,7 +557,7 @@ begin
               rin.parser <= nsl_data.cbor.feed(r.parser, cmd_i.data(0));
             end if;
           else
-            rin.timeout  <= integer( nsl_data.cbor.arg_int(r.parser) * clock_i_hz_c / 1000000 );
+            rin.timeout  <= integer( nsl_data.cbor.arg_int(r.parser) * clock_cycles_per_us_c );
             nsl_simulation.logging.log_info("arg is " & nsl_data.text.to_string(nsl_data.cbor.arg_int(r.parser)) );
             nsl_simulation.logging.log_info("Setting r.timeout to " & nsl_data.text.to_string(integer( nsl_data.cbor.arg_int(r.parser) * clock_i_hz_c / 1000000)));
             rin.parser   <= nsl_data.cbor.reset;
@@ -629,63 +628,43 @@ begin
         
         when ST_RSP_DNACK_PREP =>
           if clocker_ready_i = '1' then
-            nsl_data.bytestream.write(s => cbr_encoded, d => nsl_data.cbor.cbor_tagged(tag => 2, item => nsl_data.cbor.cbor_positive(value => (r.word_total - r.word_count - 1) ))  );
-            nsl_simulation.logging.log_info("cbr_encoded " & nsl_data.text.to_string(cbr_encoded.all) );
-
-            rin.encoded_len <= cbr_encoded.all'length;
-            rin.encoded(cbr_encoded.all'length-1 downto 0) <= cbr_encoded.all;
-            nsl_data.bytestream.clear(s => cbr_encoded);
-
+            rin.encoded <= nsl_amba.axi4_stream.reset(buffer_cfg_c, nsl_data.cbor.cbor_tagged(tag => 2, item => nsl_data.cbor.cbor_positive(value => to_unsigned( r.word_total - r.word_count - 1 , 10 ) )) );
             rin.state <= ST_RSP_DNACK_PUT;
             rin.last  <= false;
           end if;
           
         when ST_RSP_DNACK_PUT  =>
           if rsp_i.ready = '1' then
-            if r.encoded_len - 1 = r.encoded_i then
+            if nsl_amba.axi4_stream.is_last(buffer_cfg_c, r.encoded) then
               rin.state <= ST_WRITE_END;
-              rin.encoded_len <= 0;
-              rin.encoded_i <= 0;
-            else
-              rin.encoded_i <= (r.encoded_i + 1);
             end if;
+            rin.encoded <= nsl_amba.axi4_stream.shift(buffer_cfg_c, r.encoded);
           end if;
 
-      when ST_RSP_ARRAY_HDR_PREP =>
-          nsl_data.bytestream.write(s => cbr_encoded, d => nsl_data.cbor.cbor_array_hdr(length => -1) );
-          rin.encoded_len <= cbr_encoded.all'length;
-          rin.encoded(cbr_encoded.all'length-1 downto 0) <= cbr_encoded.all;
-          rin.state <= ST_RSP_ARRAY_HDR_PUT;
-          rin.last  <= false;
-          nsl_data.bytestream.clear(s => cbr_encoded);
+      when ST_RSP_ARRAY_HDR_PREP =>          
+        rin.encoded <= nsl_amba.axi4_stream.reset(buffer_cfg_c, nsl_data.cbor.cbor_array_hdr(length => -1) );
+        rin.state <= ST_RSP_ARRAY_HDR_PUT;
+        rin.last  <= false;
         
       when ST_RSP_ARRAY_HDR_PUT =>
           if rsp_i.ready = '1' then
-            if r.encoded_len - 1 = r.encoded_i then
+            if nsl_amba.axi4_stream.is_last(buffer_cfg_c, r.encoded) then
               rin.state <= ST_CMD_GET;
-              rin.encoded_len <= 0;
-              rin.encoded_i <= 0;
-            else
-              rin.encoded_i <= (r.encoded_i + 1);
             end if;
+            rin.encoded <= nsl_amba.axi4_stream.shift(buffer_cfg_c, r.encoded);
           end if;
 
       when ST_RSP_BSTR_HDR_PREP =>
-          nsl_data.bytestream.write(s => cbr_encoded, d => nsl_data.cbor.cbor_bstr_hdr(length => r.word_count));
-          rin.encoded_len <= cbr_encoded.all'length;
-          rin.encoded(cbr_encoded.all'length-1 downto 0) <= cbr_encoded.all;
-          nsl_data.bytestream.clear(s => cbr_encoded);
+          rin.encoded <= nsl_amba.axi4_stream.reset(buffer_cfg_c, nsl_data.cbor.cbor_bstr_hdr(length => to_unsigned(r.word_count, 10) ) );          
           rin.state <= ST_RSP_BSTR_HDR_PUT;
+          rin.last  <= false;
 
       when ST_RSP_BSTR_HDR_PUT =>
           if rsp_i.ready = '1' then
-            if r.encoded_len - 1 = r.encoded_i then
+            if nsl_amba.axi4_stream.is_last(buffer_cfg_c, r.encoded) then
               rin.state <= ST_READ_RUN;
-              rin.encoded_len <= 0;
-              rin.encoded_i <= 0;
-            else
-              rin.encoded_i <= (r.encoded_i + 1);
             end if;
+            rin.encoded <= nsl_amba.axi4_stream.shift(buffer_cfg_c, r.encoded);
           end if;
           
       when ST_RSP_BREAK_PREP=>
@@ -780,7 +759,7 @@ begin
           rsp_o <= nsl_amba.axi4_stream.transfer( cfg => axi_s_cfg_c, bytes => nsl_data.bytestream.from_suv(r.data) , last => r.last);
 
         when ST_RSP_BSTR_HDR_PUT | ST_RSP_ARRAY_HDR_PUT | ST_RSP_DNACK_PUT =>
-          rsp_o <= nsl_amba.axi4_stream.transfer( cfg => axi_s_cfg_c, bytes => r.encoded(r.encoded_len - r.encoded_i - 1 downto r.encoded_len - r.encoded_i - 1), last => r.last);
+          rsp_o <= nsl_amba.axi4_stream.next_beat(cfg => buffer_cfg_c, b => r.encoded, last => r.last);
        
         when ST_IO_FLUSH_GET =>
         when ST_IO_FLUSH_PUT =>      
