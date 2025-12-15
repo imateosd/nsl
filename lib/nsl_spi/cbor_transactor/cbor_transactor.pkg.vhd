@@ -43,7 +43,7 @@ package cbor_transactor is
     -- mode              = 0..3
     -- spi-unselect      = null
 
-    -- The responses are encoded in a 
+    -- The responses are encoded in an array:
     -- responses = [* response]
     -- response = spi-shift-bytes    ; response data stream, only for shifts not tagged with #6.9
 

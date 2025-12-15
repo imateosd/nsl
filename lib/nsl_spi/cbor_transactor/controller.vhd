@@ -126,7 +126,6 @@ architecture rtl of controller is
       nsl_simulation.logging.log_info("In " & state_to_string(r.state) & " => " & state_to_string(rin.state) & LF );
     end if;
   end procedure;
-
   
 begin
   
@@ -423,7 +422,6 @@ begin
         end if;
 
       when ST_RSP_BSTR_HDR_PREP =>
-        -- rin.encoded <= nsl_amba.axi4_stream.reset(buffer_cfg_c, nsl_data.cbor.cbor_bstr_hdr(length => to_unsigned(r.word_count+1, get_unsigned_width(r.word_count+1)) ) );
         rin.encoded <= nsl_amba.axi4_stream.reset(buffer_cfg_c, nsl_data.cbor.cbor_bstr_hdr(length => to_unsigned(r.word_count+1, 12) ) );
         rin.state <= ST_RSP_BSTR_HDR_PUT;
         rin.last  <= false;
