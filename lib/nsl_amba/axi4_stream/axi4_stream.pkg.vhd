@@ -358,7 +358,18 @@ package axi4_stream is
                          constant packet : byte_string;
                          constant id : std_ulogic_vector := na_suv;
                          constant user : std_ulogic_vector := na_suv;
-                         constant dest : std_ulogic_vector := na_suv);
+                         constant dest : std_ulogic_vector := na_suv;
+                         sev : severity_level := failure);
+  procedure packet_check(constant cfg: config_t;
+                         signal clock: in std_ulogic;
+                         signal stream_i: in master_t;
+                         signal stream_o: out slave_t;
+                         constant packet : byte_string;
+                         constant id : std_ulogic_vector := na_suv;
+                         constant user : std_ulogic_vector := na_suv;
+                         constant dest : std_ulogic_vector := na_suv;
+                         variable check_status : out boolean;
+                         sev : severity_level := failure);
 
   -- Beat manipulation functions
   --
@@ -593,6 +604,18 @@ package axi4_stream is
     dt : in time := 10 ns;
     timeout : in time := 100 us;
     sev: severity_level := failure);
+  -- Overload that outputs a status boolean for the operation
+  -- Only makes sense for severity levels other than 'failure'
+  procedure frame_queue_check(
+    variable root: frame_queue_root_t;
+    constant data: byte_string := null_byte_string;
+    constant dest: std_ulogic_vector := na_suv;
+    constant id:   std_ulogic_vector := na_suv;
+    constant user: std_ulogic_vector := na_suv;
+    variable check_status : out boolean;
+    dt : in time := 10 ns;
+    timeout : in time := 100 us;
+    sev: severity_level := failure);
 
   -- Waits for a frame to be present on a queue.
   -- When it is present, asserts for equality with passed reference data.
@@ -601,6 +624,15 @@ package axi4_stream is
   procedure frame_queue_check(
     variable root: in frame_queue_root_t;
     variable frm: in frame_t;
+    dt : in time := 10 ns;
+    timeout : in time := 100 us;
+    sev: severity_level := failure);
+  -- Overload that outputs a status boolean for the operation
+  -- Only makes sense for severity levels other than 'failure'
+  procedure frame_queue_check(
+    variable root: in frame_queue_root_t;
+    variable frm: in frame_t;
+    variable check_status : out boolean;
     dt : in time := 10 ns;
     timeout : in time := 100 us;
     sev: severity_level := failure);
@@ -617,6 +649,19 @@ package axi4_stream is
     dt : in time := 10 ns;
     timeout : in time := 100 us;
     sev: severity_level := failure);
+  -- Overload that outputs a status boolean for the operation
+  -- Only makes sense for severity levels other than 'failure'
+  procedure frame_queue_check_io(
+    variable root_master: in frame_queue_root_t;
+    variable root_slave: in frame_queue_root_t;
+    constant data: byte_string := null_byte_string;
+    constant dest: std_ulogic_vector := na_suv;
+    constant id:   std_ulogic_vector := na_suv;
+    constant user: std_ulogic_vector := na_suv;
+    variable check_status : out boolean;
+    dt : in time := 10 ns;
+    timeout : in time := 100 us;
+    sev: severity_level := failure);
 
   -- Sends a frame on master queue and expects exactly matching frame on slave
   -- queue.
@@ -624,6 +669,16 @@ package axi4_stream is
     variable root_master: in frame_queue_root_t;
     variable root_slave: in frame_queue_root_t;
     variable frm: in frame_t;
+    dt : in time := 10 ns;
+    timeout : in time := 100 us;
+    sev: severity_level := failure);
+  -- Overload that outputs a status boolean for the operation
+  -- Only makes sense for severity levels other than 'failure'
+  procedure frame_queue_check_io(
+    variable root_master: in frame_queue_root_t;
+    variable root_slave: in frame_queue_root_t;
+    variable frm: in frame_t;
+    variable check_status : out boolean;
     dt : in time := 10 ns;
     timeout : in time := 100 us;
     sev: severity_level := failure);
@@ -638,6 +693,17 @@ package axi4_stream is
     dt : in time := 10 ns;
     timeout : in time := 100 us;
     sev: severity_level := failure);
+  -- Overload that outputs a status boolean for the operation
+  -- Only makes sense for severity levels other than 'failure'
+  procedure frame_queue_check_io(
+    variable root_master: in frame_queue_root_t;
+    variable root_slave: in frame_queue_root_t;
+    variable frm1: in frame_t;
+    variable frm2: in frame_t;
+    variable check_status : out boolean;
+    dt : in time := 10 ns;
+    timeout : in time := 100 us;
+    sev: severity_level := failure);
 
   -- Sends a frame (of data1) on master queue and expects an exactly matching frame
   -- (data2) on slave queue
@@ -649,6 +715,20 @@ package axi4_stream is
     constant dest: std_ulogic_vector := na_suv;
     constant id:   std_ulogic_vector := na_suv;
     constant user: std_ulogic_vector := na_suv;
+    dt : in time := 10 ns;
+    timeout : in time := 100 us;
+    sev: severity_level := failure);
+  -- Overload that outputs a status boolean for the operation
+  -- Only makes sense for severity levels other than 'failure'
+  procedure frame_queue_check_io(
+    variable root_master: in frame_queue_root_t;
+    variable root_slave: in frame_queue_root_t;
+    constant data1: byte_string := null_byte_string;
+    constant data2: byte_string := null_byte_string;
+    constant dest: std_ulogic_vector := na_suv;
+    constant id:   std_ulogic_vector := na_suv;
+    constant user: std_ulogic_vector := na_suv;
+    variable check_status : out boolean;
     dt : in time := 10 ns;
     timeout : in time := 100 us;
     sev: severity_level := failure);
@@ -1564,36 +1644,60 @@ package body axi4_stream is
                          constant packet : byte_string;
                          constant id : std_ulogic_vector := na_suv;
                          constant user : std_ulogic_vector := na_suv;
-                         constant dest : std_ulogic_vector := na_suv)
+                         constant dest : std_ulogic_vector := na_suv;
+                         sev : severity_level := failure)
+  is
+    variable check_status : boolean;
+  begin
+    packet_check(cfg, clock, stream_i, stream_o, packet, id, user, dest, check_status, sev);
+  end procedure;
+  
+  procedure packet_check(constant cfg: config_t;
+                         signal clock: in std_ulogic;
+                         signal stream_i: in master_t;
+                         signal stream_o: out slave_t;
+                         constant packet : byte_string;
+                         constant id : std_ulogic_vector := na_suv;
+                         constant user : std_ulogic_vector := na_suv;
+                         constant dest : std_ulogic_vector := na_suv;
+                         variable check_status : out boolean;
+                         sev : severity_level := failure)
   is
     variable rid : std_ulogic_vector(cfg.id_width-1 downto 0);
     variable ruser : std_ulogic_vector(cfg.user_width-1 downto 0);
     variable rdest : std_ulogic_vector(cfg.dest_width-1 downto 0);
     variable rdata : byte_string(0 to packet'length-1);
+    variable status : boolean := true;
   begin
     packet_receive(cfg, clock, stream_i, stream_o, rdata, rid, ruser, rdest);
 
     if id'length /= 0 then
-      assert std_match(id, rid)
+      status := status and std_match(id, rid);
+      assert status
         report "Bad ID, had "&to_string(rid)&", expected "&to_string(id)
-        severity failure;
+        severity sev;
     end if;
-    
+
     if user'length /= 0 then
-      assert std_match(user, ruser)
+      status := status and std_match(user, ruser);
+      assert status
         report "Bad USER, had "&to_string(ruser)&", expected "&to_string(user)
-        severity failure;
+        severity sev;
     end if;
 
     if dest'length /= 0 then
-      assert std_match(dest, rdest)
+      status := status and std_match(dest, rdest);
+      assert status
         report "Bad DEST, had "&to_string(rdest)&", expected "&to_string(dest)
-        severity failure;
+        severity sev;
     end if;
 
-    assert std_match(packet, rdata)
+    status := status and std_match(packet, rdata);
+    assert status
         report "Bad data, had "&to_string(rdata)&", expected "&to_string(packet)
-        severity failure;
+        severity sev;
+
+    check_status := status;
   end procedure;
 
   function to_string(cfg: buffer_config_t) return string
@@ -1956,24 +2060,56 @@ package body axi4_stream is
   end procedure;
 
   procedure frame_queue_check(
+    variable root: frame_queue_root_t;
+    constant data: byte_string := null_byte_string;
+    constant dest: std_ulogic_vector := na_suv;
+    constant id:   std_ulogic_vector := na_suv;
+    constant user: std_ulogic_vector := na_suv;
+    variable check_status : out boolean;
+    dt : in time := 10 ns;
+    timeout : in time := 100 us;
+    sev: severity_level := failure)
+  is
+    variable frm: frame_t := frame(data, dest, id, user);
+  begin
+    frame_queue_check(root, frm, check_status, dt, timeout, sev);
+  end procedure;
+  
+  procedure frame_queue_check(
     variable root: in frame_queue_root_t;
     variable frm: in frame_t;
     dt : in time := 10 ns;
     timeout : in time := 100 us;
     sev: severity_level := failure)
   is
+    variable check_status : boolean;
+  begin
+    frame_queue_check(root, frm, check_status, dt, timeout, sev);
+  end procedure;
+
+  procedure frame_queue_check(
+    variable root: in frame_queue_root_t;
+    variable frm: in frame_t;
+    variable check_status : out boolean;
+    dt : in time := 10 ns;
+    timeout : in time := 100 us;
+    sev: severity_level := failure)
+  is
     variable rx_frm: frame_t;
     variable ref_frm: frame_t := frm;
+    variable status : boolean;
   begin
     frame_queue_get(root, rx_frm, dt, timeout, sev);
-    assert rx_frm.data.all = ref_frm.data.all
+    status := rx_frm.data.all = ref_frm.data.all
       and rx_frm.id = ref_frm.id
       and rx_frm.user = ref_frm.user
-      and rx_frm.dest = ref_frm.dest
+      and rx_frm.dest = ref_frm.dest;
+    assert status
       report "Bad frame received, expected "&to_string(ref_frm.data.all)&", received "&to_string(rx_frm.data.all)
       severity sev;
     deallocate(rx_frm.data);
     deallocate(ref_frm.data);
+    check_status := status;
   end procedure;
 
   procedure frame_queue_check_io(
@@ -1991,7 +2127,24 @@ package body axi4_stream is
   begin
     frame_queue_check_io(root_master, root_slave, frm, dt, timeout, sev);
   end procedure;
-
+  
+  procedure frame_queue_check_io(
+    variable root_master: in frame_queue_root_t;
+    variable root_slave: in frame_queue_root_t;
+    constant data: byte_string := null_byte_string;
+    constant dest: std_ulogic_vector := na_suv;
+    constant id:   std_ulogic_vector := na_suv;
+    constant user: std_ulogic_vector := na_suv;
+    variable check_status : out boolean;
+    dt : in time := 10 ns;
+    timeout : in time := 100 us;
+    sev: severity_level := failure)
+  is
+    variable frm: frame_t := frame(data, dest, id, user);
+  begin
+    frame_queue_check_io(root_master, root_slave, frm, check_status, dt, timeout, sev);
+  end procedure;
+  
   procedure frame_queue_check_io(
     variable root_master: in frame_queue_root_t;
     variable root_slave: in frame_queue_root_t;
@@ -2005,6 +2158,22 @@ package body axi4_stream is
     frame_clone(c, frm);
     frame_queue_put(root_master, c);
     frame_queue_check(root_slave, frm, dt, timeout, sev);
+  end procedure;
+  
+  procedure frame_queue_check_io(
+    variable root_master: in frame_queue_root_t;
+    variable root_slave: in frame_queue_root_t;
+    variable frm: in frame_t;
+    variable check_status : out boolean;
+    dt : in time := 10 ns;
+    timeout : in time := 100 us;
+    sev: severity_level := failure)
+  is
+    variable c : frame_t;
+  begin
+    frame_clone(c, frm);
+    frame_queue_put(root_master, c);
+    frame_queue_check(root_slave, frm, check_status, dt, timeout, sev);
   end procedure;
 
   procedure frame_queue_check_io(
@@ -2025,6 +2194,22 @@ package body axi4_stream is
   procedure frame_queue_check_io(
     variable root_master: in frame_queue_root_t;
     variable root_slave: in frame_queue_root_t;
+    variable frm1: in frame_t;
+    variable frm2: in frame_t;
+    variable check_status : out boolean;
+    dt : in time := 10 ns;
+    timeout : in time := 100 us;
+    sev: severity_level := failure)
+  is
+    variable c1, c2 : frame_t;
+  begin
+    frame_queue_put(root_master, frm1);
+    frame_queue_check(root_slave, frm2, check_status, dt, timeout, sev);
+  end procedure;
+
+  procedure frame_queue_check_io(
+    variable root_master: in frame_queue_root_t;
+    variable root_slave: in frame_queue_root_t;
     constant data1: byte_string := null_byte_string;
     constant data2: byte_string := null_byte_string;
     constant dest: std_ulogic_vector := na_suv;
@@ -2039,7 +2224,26 @@ package body axi4_stream is
   begin
     frame_queue_check_io(root_master, root_slave, frm1, frm2, dt, timeout, sev);
   end procedure;
-  
+
+  procedure frame_queue_check_io(
+    variable root_master: in frame_queue_root_t;
+    variable root_slave: in frame_queue_root_t;
+    constant data1: byte_string := null_byte_string;
+    constant data2: byte_string := null_byte_string;
+    constant dest: std_ulogic_vector := na_suv;
+    constant id:   std_ulogic_vector := na_suv;
+    constant user: std_ulogic_vector := na_suv;
+    variable check_status : out boolean;
+    dt : in time := 10 ns;
+    timeout : in time := 100 us;
+    sev: severity_level := failure)
+  is
+    variable frm1: frame_t := frame(data1, dest, id, user);
+    variable frm2: frame_t := frame(data2, dest, id, user);
+  begin
+    frame_queue_check_io(root_master, root_slave, frm1, frm2, check_status, dt, timeout, sev);
+  end procedure;
+    
   procedure frame_queue_get(
     variable root: frame_queue_root_t;
     variable frm: out frame_t;
@@ -2101,8 +2305,7 @@ package body axi4_stream is
   is
     variable frm: frame_t;
   begin
-    stream_o <= accept(cfg, true);
-    -- stream_o <= accept(cfg, false); -- why???
+    stream_o <= accept(cfg, false);
 
     loop
       wait until falling_edge(clock);
