@@ -15,6 +15,7 @@ architecture arch of tb is
 
   signal s_cmd           : nsl_amba.axi4_stream.bus_t;
   signal s_rsp           : nsl_amba.axi4_stream.bus_t;
+  signal s_rsp_pre       : nsl_amba.axi4_stream.bus_t;
   
   signal s_i2c           : nsl_i2c.i2c.i2c_i;
   signal s_i2c_slave1, s_i2c_slave2, s_i2c_slave3, s_i2c_slave4, s_i2c_master : nsl_i2c.i2c.i2c_o;
@@ -22,12 +23,16 @@ architecture arch of tb is
   signal s_clk, s_resetn : std_ulogic;
   signal s_done : std_ulogic_vector(0 to 0);
 
-  constant MAX_COUNT     : natural := 500; -- 5 us
+  constant MAX_COUNT     : natural := 400; -- 4 us
   signal counter         : natural range 0 to MAX_COUNT := 0;
   signal s_enable_slave4 : std_ulogic;
   signal s_resetn_slave4 : std_ulogic;
   
   shared variable cmd_q, rsp_q: nsl_amba.axi4_stream.frame_queue_root_t;
+  
+  -- Test control signals
+  signal test_timeout : boolean := false;
+  signal test_complete : boolean := false;
   
   -- Operations
   -- Write to 0x50, 0x12 and 0x34          -> [[0x50, h'1234'], null]
@@ -80,7 +85,7 @@ begin
   
   i2c_slave: nsl_i2c.clocked.clocked_slave
     generic map(
-      clock_freq_c => 100000000
+      clock_freq_c => 10e7
     )
     port map(
       reset_n_i => s_resetn,
@@ -121,7 +126,7 @@ begin
   
   i2c_slave_nack: entity work.clocked_slave_nack
     generic map(
-      clock_freq_c => 100000000
+      clock_freq_c => 10e7
     )
     port map(
       reset_n_i => s_resetn,
@@ -148,7 +153,7 @@ begin
   
   i2c_slave_delayed: nsl_i2c.clocked.clocked_slave
     generic map(
-      clock_freq_c => 100000000
+      clock_freq_c => 10e7
     )
     port map(
       reset_n_i => s_resetn_slave4,
@@ -175,8 +180,8 @@ begin
   
   dut: nsl_i2c.cbor_transactor.controller
     generic map(
-      system_clock_c => 10e7,
-      axi_s_cfg_c    => cfg_c
+      clock_i_hz_c => 10e7,
+      axi_s_cfg_c  => cfg_c
       )
     port map(
       clock_i  =>  s_clk,
@@ -185,13 +190,28 @@ begin
       cmd_i => s_cmd.m,
       cmd_o => s_cmd.s,
 
-      rsp_o => s_rsp.m,
-      rsp_i => s_rsp.s,
+      rsp_o => s_rsp_pre.m,
+      rsp_i => s_rsp_pre.s,
       
       i2c_i => s_i2c,
       i2c_o => s_i2c_master
       );
 
+  rsp_pacer : nsl_amba.stream_traffic.axi4_stream_pacer
+    generic map(
+      config_c => cfg_c,
+      probability_c => 0.1
+      )
+  port map(
+    clock_i => s_clk,
+    reset_n_i => s_resetn,
+
+    in_i => s_rsp_pre.m,
+    in_o => s_rsp_pre.s,
+
+    out_o => s_rsp.m,
+    out_i => s_rsp.s
+    ); 
   
   driver: nsl_simulation.driver.simulation_driver
     generic map(
@@ -206,17 +226,16 @@ begin
       clock_o(0) => s_clk,
       done_i => s_done
       );
-
   
   -- Keep slave4 in reset state until s_enable_slave4 is set to '1'
-  -- Then wait 50 us and release the reset
+  -- Then wait 4 us and release the reset
   process(s_clk)
   begin
     if rising_edge(s_clk) then
       s_resetn_slave4 <= '0';
       if s_enable_slave4 = '0' then
         counter         <= 0;
-      elsif counter < MAX_COUNT then -- 5 us
+      elsif counter < MAX_COUNT then -- 4 us
         counter  <= counter + 1;
       else
         s_resetn_slave4 <= '1'; -- release reset
@@ -224,8 +243,24 @@ begin
     end if;
   end process;
   
+  -- Global timeout watchdog
+  timeout_watchdog: process
+  begin
+    wait for 100 ms;  -- Global timeout for entire test suite
+    if not test_complete then
+      report "======================================" severity error;
+      report "GLOBAL TIMEOUT - Test suite did not complete in time" severity error;
+      report "======================================" severity error;
+      test_timeout <= true;
+      nsl_simulation.control.terminate(2);  -- Exit with timeout error code
+    end if;
+    wait;
+  end process;
   
   stim: process
+    variable check_status : boolean := false;
+    variable pass_count, fail_count : integer := 0;
+    
   begin
     -- Let FSM reach IDLE
     wait for 50 ns;
@@ -235,128 +270,259 @@ begin
     nsl_amba.axi4_stream.frame_queue_init(cmd_q);
     nsl_amba.axi4_stream.frame_queue_init(rsp_q);
 
-    nsl_simulation.logging.log(level => nsl_simulation.logging.LOG_LEVEL_INFO,
-                   message => "Testing write to clocked slave", 
-                   color => nsl_simulation.logging.LOG_COLOR_BLUE);
-    nsl_amba.axi4_stream.frame_queue_check_io(root_master => cmd_q,
-                                              root_slave  => rsp_q,
-                                              data1       => nsl_data.bytestream.from_suv(x"8182185043123456"),
-                                              data2       => nsl_data.bytestream.from_suv(x"9ff6ff"),
-                                              dt          => clock_period,
-                                              timeout     => clock_period*2000);
-    nsl_simulation.logging.log(level => nsl_simulation.logging.LOG_LEVEL_INFO,
-                   message => "============================================================= #0 CMD-RSP CHECK PASSED" & LF,
-                   color => nsl_simulation.logging.LOG_COLOR_GREEN);
-    
-    nsl_simulation.logging.log(level => nsl_simulation.logging.LOG_LEVEL_INFO,
-                   message => "Testing read from clocked slave", 
-                   color => nsl_simulation.logging.LOG_COLOR_BLUE);
-    nsl_amba.axi4_stream.frame_queue_check_io(root_master => cmd_q,
-                                              root_slave  => rsp_q,
-                                              data1       => nsl_data.bytestream.from_suv(x"8282185002f6"),
-                                              data2       => nsl_data.bytestream.from_suv(x"9f42aaffff"),
-                                              dt          => clock_period,
-                                              timeout     => clock_period*2000);
-    nsl_simulation.logging.log(level => nsl_simulation.logging.LOG_LEVEL_INFO,
-                   message => "============================================================= #1 CMD-RSP CHECK PASSED" & LF, 
-                   color => nsl_simulation.logging.LOG_COLOR_GREEN);
-    
-    nsl_simulation.logging.log(level => nsl_simulation.logging.LOG_LEVEL_INFO,
-                   message => "Testing write to memory", 
-                   color => nsl_simulation.logging.LOG_COLOR_BLUE);
-    nsl_amba.axi4_stream.frame_queue_check_io(root_master => cmd_q,
-                                              root_slave  => rsp_q,
-                                              data1       => nsl_data.bytestream.from_suv(x"828218404400001234f6"),
-                                              data2       => nsl_data.bytestream.from_suv(x"9ff6ff"),
-                                              dt          => clock_period,
-                                              timeout     => clock_period*2000);
-    nsl_simulation.logging.log(level => nsl_simulation.logging.LOG_LEVEL_INFO,
-                   message => "============================================================= #2 CMD-RSP CHECK PASSED" & LF, 
-                   color => nsl_simulation.logging.LOG_COLOR_GREEN);
-    
-    nsl_simulation.logging.log(level => nsl_simulation.logging.LOG_LEVEL_INFO,
-                   message => "Testing read from memory (2x i2c read and write with restart)", 
-                   color => nsl_simulation.logging.LOG_COLOR_BLUE);
-    nsl_amba.axi4_stream.frame_queue_check_io(root_master => cmd_q,
-                                              root_slave  => rsp_q,
-                                              data1       => nsl_data.bytestream.from_suv(x"8682184042000082184001f682184042000182184001f6"),
-                                              data2       => nsl_data.bytestream.from_suv(x"9ff64112f64134ff"),
-                                              dt          => clock_period,
-                                              timeout     => clock_period*2000);
-    nsl_simulation.logging.log(level => nsl_simulation.logging.LOG_LEVEL_INFO,
-                   message => "============================================================= #3 CMD-RSP CHECK PASSED" & LF, 
-                   color => nsl_simulation.logging.LOG_COLOR_GREEN);
-    
-    nsl_simulation.logging.log(level => nsl_simulation.logging.LOG_LEVEL_INFO,
-                   message => "Testing read from memory (reading 3 bytes from address 0x00)", 
-                   color => nsl_simulation.logging.LOG_COLOR_BLUE);
-    nsl_amba.axi4_stream.frame_queue_check_io(root_master => cmd_q,
-                                              root_slave  => rsp_q,
-                                              data1       => nsl_data.bytestream.from_suv(x"8382184042000082184003f6"),
-                                              data2       => nsl_data.bytestream.from_suv(x"9ff64312ffffff"),
-                                              dt          => clock_period,
-                                              timeout     => clock_period*2000);
-    nsl_simulation.logging.log(level => nsl_simulation.logging.LOG_LEVEL_INFO,
-                   message => "============================================================= #4 CMD-RSP CHECK PASSED" & LF, 
-                   color => nsl_simulation.logging.LOG_COLOR_GREEN);
-    
-    nsl_simulation.logging.log(level => nsl_simulation.logging.LOG_LEVEL_INFO,
-                   message => "Testing access to non existant address", 
-                   color => nsl_simulation.logging.LOG_COLOR_BLUE);
-    nsl_amba.axi4_stream.frame_queue_check_io(root_master => cmd_q,
-                                              root_slave  => rsp_q,
-                                              data1       => nsl_data.bytestream.from_suv(x"828218604112f6"),
-                                              data2       => nsl_data.bytestream.from_suv(x"9ff4ff"),
-                                              dt          => clock_period,
-                                              timeout     => clock_period*2000);
-    nsl_simulation.logging.log(level => nsl_simulation.logging.LOG_LEVEL_INFO,
-                   message => "============================================================= #5 CMD-RSP CHECK PASSED" & LF, 
-                   color => nsl_simulation.logging.LOG_COLOR_GREEN);
-    
-    nsl_simulation.logging.log(level => nsl_simulation.logging.LOG_LEVEL_INFO,
-                   message => "Testing NACK for data bytes", 
-                   color => nsl_simulation.logging.LOG_COLOR_BLUE);
-    nsl_amba.axi4_stream.frame_queue_check_io(root_master => cmd_q,
-                                              root_slave  => rsp_q,
-                                              data1       => nsl_data.bytestream.from_suv(x"82821830421234f6"),
-                                              data2       => nsl_data.bytestream.from_suv(x"9fc200ff"),
-                                              dt          => clock_period,
-                                              timeout     => clock_period*2000);
-    nsl_simulation.logging.log(level => nsl_simulation.logging.LOG_LEVEL_INFO,
-                   message => "============================================================= #6 CMD-RSP CHECK PASSED" & LF,
-                   color => nsl_simulation.logging.LOG_COLOR_GREEN); 
+    nsl_simulation.logging.log(
+      level => nsl_simulation.logging.LOG_LEVEL_INFO,
+      message => "======================================",
+      color => nsl_simulation.logging.LOG_COLOR_CYAN
+    );
+    nsl_simulation.logging.log(
+      level => nsl_simulation.logging.LOG_LEVEL_INFO,
+      message => "I2C CBOR TRANSACTOR TEST SUITE",
+      color => nsl_simulation.logging.LOG_COLOR_CYAN
+    );
+    nsl_simulation.logging.log(
+      level => nsl_simulation.logging.LOG_LEVEL_INFO,
+      message => "======================================",
+      color => nsl_simulation.logging.LOG_COLOR_CYAN
+    );
 
-    nsl_simulation.logging.log(level => nsl_simulation.logging.LOG_LEVEL_INFO,
-                   message => "Testing poll-read for a non-existant slave", 
-                   color => nsl_simulation.logging.LOG_COLOR_BLUE);
-    nsl_amba.axi4_stream.frame_queue_check_io(root_master => cmd_q,
-                                              root_slave  => rsp_q,
-                                              data1       => nsl_data.bytestream.from_suv(x"82c1830a187002f6"),
-                                              data2       => nsl_data.bytestream.from_suv(x"9ff4ff"),
-                                              dt          => clock_period,
-                                              timeout     => clock_period*2000);
-    nsl_simulation.logging.log(level => nsl_simulation.logging.LOG_LEVEL_INFO,
-                   message => "============================================================= #7 CMD-RSP CHECK PASSED" & LF,
-                   color => nsl_simulation.logging.LOG_COLOR_GREEN); 
+    -- Test 0: Write to clocked slave
+    nsl_amba.axi4_stream.frame_queue_check_io(
+      root_master => cmd_q,
+      root_slave  => rsp_q,
+      data1       => nsl_data.bytestream.from_suv(x"8182185043123456"),
+      data2       => nsl_data.bytestream.from_suv(x"9ff6ff"),
+      check_status => check_status,
+      dt          => clock_period,
+      timeout     => clock_period*200000,
+      sev         => warning
+    );
+    nsl_simulation.logging.log_test_result("Write to clocked slave", check_status, pass_count, fail_count);
+    
+    -- Test 1: Read from clocked slave
+    nsl_amba.axi4_stream.frame_queue_check_io(
+      root_master => cmd_q,
+      root_slave  => rsp_q,
+      data1       => nsl_data.bytestream.from_suv(x"8282185002f6"),
+      data2       => nsl_data.bytestream.from_suv(x"9f590002aaaaff"),
+      check_status => check_status,
+      dt          => clock_period,
+      timeout     => clock_period*200000,
+      sev         => warning
+    );
+    nsl_simulation.logging.log_test_result("Read from clocked slave", check_status, pass_count, fail_count);
+    
+    -- Test 2: Write to memory
+    nsl_amba.axi4_stream.frame_queue_check_io(
+      root_master => cmd_q,
+      root_slave  => rsp_q,
+      data1       => nsl_data.bytestream.from_suv(x"828218404400001234f6"),
+      data2       => nsl_data.bytestream.from_suv(x"9ff6ff"),
+      check_status => check_status,
+      dt          => clock_period,
+      timeout     => clock_period*200000,
+      sev         => warning
+    );
+    nsl_simulation.logging.log_test_result("Write to memory", check_status, pass_count, fail_count);
+    
+    -- Test 3: Read from memory (2x i2c read and write with restart)
+    nsl_amba.axi4_stream.frame_queue_check_io(
+      root_master => cmd_q,
+      root_slave  => rsp_q,
+      data1       => nsl_data.bytestream.from_suv(x"8682184042000082184001f682184042000182184001f6"),
+      data2       => nsl_data.bytestream.from_suv(x"9ff659000112f659000134ff"),
+      check_status => check_status,
+      dt          => clock_period,
+      timeout     => clock_period*200000,
+      sev         => warning
+    );
+    nsl_simulation.logging.log_test_result("Read from memory (2x i2c read/write with restart)", check_status, pass_count, fail_count);
+    
+    -- Test 4: Read 3 bytes from memory address 0x00
+    nsl_amba.axi4_stream.frame_queue_check_io(
+      root_master => cmd_q,
+      root_slave  => rsp_q,
+      data1       => nsl_data.bytestream.from_suv(x"8382184042000082184003f6"),
+      data2       => nsl_data.bytestream.from_suv(x"9ff65900031234ffff"),
+      check_status => check_status,
+      dt          => clock_period,
+      timeout     => clock_period*200000,
+      sev         => warning
+    );
+    nsl_simulation.logging.log_test_result("Read 3 bytes from memory address 0x00", check_status, pass_count, fail_count);
+    
+    -- Test 5: Access to non-existent address
+    nsl_amba.axi4_stream.frame_queue_check_io(
+      root_master => cmd_q,
+      root_slave  => rsp_q,
+      data1       => nsl_data.bytestream.from_suv(x"828218604112f6"),
+      data2       => nsl_data.bytestream.from_suv(x"9ff4ff"),
+      check_status => check_status,
+      dt          => clock_period,
+      timeout     => clock_period*200000,
+      sev         => warning
+    );
+    nsl_simulation.logging.log_test_result("Access to non-existent address (expect NACK)", check_status, pass_count, fail_count);
+    
+    -- Test 6: NACK for data bytes
+    nsl_amba.axi4_stream.frame_queue_check_io(
+      root_master => cmd_q,
+      root_slave  => rsp_q,
+      data1       => nsl_data.bytestream.from_suv(x"82821830421234f6"),
+      data2       => nsl_data.bytestream.from_suv(x"9fc2190000ff"),
+      check_status => check_status,
+      dt          => clock_period,
+      timeout     => clock_period*200000,
+      sev         => warning
+    );
+    nsl_simulation.logging.log_test_result("NACK for data bytes", check_status, pass_count, fail_count);
 
+    -- Test 7: Poll-read for non-existent slave
+    nsl_amba.axi4_stream.frame_queue_check_io(
+      root_master => cmd_q,
+      root_slave  => rsp_q,
+      data1       => nsl_data.bytestream.from_suv(x"82c1830a187002f6"),
+      data2       => nsl_data.bytestream.from_suv(x"9ff4ff"),
+      check_status => check_status,
+      dt          => clock_period,
+      timeout     => clock_period*200000,
+      sev         => warning
+    );
+    nsl_simulation.logging.log_test_result("Poll-read for non-existent slave", check_status, pass_count, fail_count);
 
-    nsl_simulation.logging.log(level => nsl_simulation.logging.LOG_LEVEL_INFO,
-                   message => "Testing poll-read for a slave that will be enabled in 5 us (timeout set to 10 us)", 
-                   color => nsl_simulation.logging.LOG_COLOR_BLUE);
+    -- Test 8: Poll-read for delayed slave
     s_enable_slave4 <= '1';
-    nsl_amba.axi4_stream.frame_queue_check_io(root_master => cmd_q,
-                                              root_slave  => rsp_q,
-                                              data1       => nsl_data.bytestream.from_suv(x"82c1830a182001f6"),
-                                              data2       => nsl_data.bytestream.from_suv(x"9f41bbff"),
-                                              dt          => clock_period,
-                                              timeout     => clock_period*2000);
-    nsl_simulation.logging.log(level => nsl_simulation.logging.LOG_LEVEL_INFO,
-                   message => "============================================================= #8 CMD-RSP CHECK PASSED" & LF,
-                   color => nsl_simulation.logging.LOG_COLOR_GREEN); 
-  
+    nsl_amba.axi4_stream.frame_queue_check_io(
+      root_master => cmd_q,
+      root_slave  => rsp_q,
+      data1       => nsl_data.bytestream.from_suv(x"82c1831864182001f6"),
+      data2       => nsl_data.bytestream.from_suv(x"9f590001bbff"),
+      check_status => check_status,
+      dt          => clock_period,
+      timeout     => clock_period*200000,
+      sev         => warning
+    );
+    nsl_simulation.logging.log_test_result("Poll-read for slave enabled after 4us (timeout 100us)", check_status, pass_count, fail_count);
+
+    -- Test 9: Simple read from non-existent address (not poll-read, expect immediate NACK)
+    nsl_amba.axi4_stream.frame_queue_check_io(
+      root_master => cmd_q,
+      root_slave  => rsp_q,
+      data1       => nsl_data.bytestream.from_suv(x"8282186002f6"),
+      data2       => nsl_data.bytestream.from_suv(x"9ff4ff"),
+      check_status => check_status,
+      dt          => clock_period,
+      timeout     => clock_period*200000,
+      sev         => warning
+    );
+    nsl_simulation.logging.log_test_result("Read from non-existent address (expect NACK)", check_status, pass_count, fail_count);
+
+    -- Test 10: Write followed by read with explicit stop between
+    nsl_amba.axi4_stream.frame_queue_check_io(
+      root_master => cmd_q,
+      root_slave  => rsp_q,
+      data1       => nsl_data.bytestream.from_suv(x"8482185041aaf682185001f6"),
+      data2       => nsl_data.bytestream.from_suv(x"9ff6590001aaff"),
+      check_status => check_status,
+      dt          => clock_period,
+      timeout     => clock_period*200000,
+      sev         => warning
+    );
+    nsl_simulation.logging.log_test_result("Write followed by read with stop between", check_status, pass_count, fail_count);
+
+    -- Test 11: Write to one slave, then write to different slave without stop (repeated start)
+    nsl_amba.axi4_stream.frame_queue_check_io(
+      root_master => cmd_q,
+      root_slave  => rsp_q,
+      data1       => nsl_data.bytestream.from_suv(x"83821850411182184044001055aaf6"),
+      data2       => nsl_data.bytestream.from_suv(x"9ff6f6ff"),
+      check_status => check_status,
+      dt          => clock_period,
+      timeout     => clock_period*200000,
+      sev         => warning
+    );
+    nsl_simulation.logging.log_test_result("Repeated start: Write to addr 0x50, then 0x40 without stop", check_status, pass_count, fail_count);
+
+    -- Test 12: Write followed by repeated start read (no stop between)
+    nsl_amba.axi4_stream.frame_queue_check_io(
+      root_master => cmd_q,
+      root_slave  => rsp_q,
+      data1       => nsl_data.bytestream.from_suv(x"8382185041dd82185002f6"),
+      data2       => nsl_data.bytestream.from_suv(x"9ff6590002aaaaff"),
+      check_status => check_status,
+      dt          => clock_period,
+      timeout     => clock_period*200000,
+      sev         => warning
+    );
+    nsl_simulation.logging.log_test_result("Write followed by repeated start read (no stop)", check_status, pass_count, fail_count);
+
+    -- Test 13: Multiple writes to different slaves in sequence with stops
+    -- Commands: [write 0x50 h'0a', stop, write 0x40 h'001055aa', stop, write 0x50 h'fe', stop]
+    nsl_amba.axi4_stream.frame_queue_check_io(
+      root_master => cmd_q,
+      root_slave  => rsp_q,
+      data1       => nsl_data.bytestream.from_suv(x"86821850410af682184044001055aaf682185041fef6"),
+      data2       => nsl_data.bytestream.from_suv(x"9ff6f6f6ff"),
+      check_status => check_status,
+      dt          => clock_period,
+      timeout     => clock_period*200000,
+      sev         => warning
+    );
+    nsl_simulation.logging.log_test_result("Multiple writes to different slaves with stops", check_status, pass_count, fail_count);
+
+    -- Test 14: Medium length byte string write (6 bytes)
+    -- Command: array(2) = [write [0x50, bstr(6)], stop]
+    nsl_amba.axi4_stream.frame_queue_check_io(
+      root_master => cmd_q,
+      root_slave  => rsp_q,
+      data1       => nsl_data.bytestream.from_suv(x"8282185046000102030405f6"),
+      data2       => nsl_data.bytestream.from_suv(x"9ff6ff"),
+      check_status => check_status,
+      dt          => clock_period,
+      timeout     => clock_period*200000,
+      sev         => warning
+    );
+    nsl_simulation.logging.log_test_result("Medium length byte string write (6 bytes)", check_status, pass_count, fail_count);
+
+    -- Test 15: Back-to-back writes (3 writes without stops, then final stop)
+    -- Command: array(4) = [write, write, write, stop]
+    nsl_amba.axi4_stream.frame_queue_check_io(
+      root_master => cmd_q,
+      root_slave  => rsp_q,
+      data1       => nsl_data.bytestream.from_suv(x"8482185041aa82185041bb82185041ccf6"),
+      data2       => nsl_data.bytestream.from_suv(x"9ff6f6f6ff"),
+      check_status => check_status,
+      dt          => clock_period,
+      timeout     => clock_period*200000,
+      sev         => warning
+    );
+    nsl_simulation.logging.log_test_result("Back-to-back writes (3 writes, 1 stop)", check_status, pass_count, fail_count);
+
+    -- Test 16: Medium read operation (4 bytes, slave returns 0xAA)
+    -- Command: array(2) = [read [0x50, 4], stop]
+    nsl_amba.axi4_stream.frame_queue_check_io(
+      root_master => cmd_q,
+      root_slave  => rsp_q,
+      data1       => nsl_data.bytestream.from_suv(x"8282185004f6"),
+      data2       => nsl_data.bytestream.from_suv(x"9f590004aaaaaaaaff"),
+      check_status => check_status,
+      dt          => clock_period,
+      timeout     => clock_period*200000,
+      sev         => warning
+    );
+    nsl_simulation.logging.log_test_result("Medium read operation (4 bytes)", check_status, pass_count, fail_count);
+
     wait for 1000 ns;
 
-    nsl_simulation.control.terminate(0);
+    nsl_simulation.logging.log_test_suite_summary("I2C CBOR TRANSACTOR TESTS", pass_count, fail_count);
+
+    test_complete <= true;
+
+    if fail_count > 0 then
+      nsl_simulation.control.terminate(1);
+    else
+      nsl_simulation.control.terminate(0);
+    end if;
   end process;
 
   cmd_queue: process
@@ -367,7 +533,7 @@ begin
                                message => "Going to run frame_queue_master", 
                                color => nsl_simulation.logging.LOG_COLOR_MAGENTA);
     nsl_amba.axi4_stream.frame_queue_master(cfg => cfg_c, root => cmd_q, clock => s_clk,
-                                            stream_i => s_cmd.s, stream_o => s_cmd.m, dt => clock_period);    
+                                            stream_i => s_cmd.s, stream_o => s_cmd.m, dt => clock_period);
   end process;
   
   rsp_queue: process
