@@ -1,29 +1,22 @@
 pipeline {
-    agent any
-
-    triggers {
-        pollSCM('H * * * *')
+    agent {
+        docker { image 'python:3.11' }
     }
 
     stages {
-        stage('Checkout') {
+        stage('Checkout & Install') {
             steps {
                 checkout scm
+                sh 'pip install -r tests/requirements.txt'
             }
         }
 
-        stage('Install dependencies') {
-            steps {
-                sh 'python3 -m pip install -r requirements.txt'
-            }
-        }
-
-        stage('Run tests') {
+        stage('Run Tests') {
             steps {
                 sh '''
-		   mkdir -p tests/reports
-		   pytest tests/ --junitxml=tests/reports/pytest-results.xml
-		   '''
+                    mkdir -p tests/reports
+                    pytest tests/ --junitxml=tests/reports/pytest-results.xml
+                '''
             }
         }
     }
