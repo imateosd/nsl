@@ -3,32 +3,35 @@ from pathlib import Path
 from conftest import VHDL_TESTBENCHES_TO_RUN, discover_vhdl_testbenches, get_simulation_result
 
 BASE_DIR = Path(__file__).parent
+
+# Map resolved paths to configured relative paths for reporting
 CONFIGURED_PATHS = [(Path(p).resolve(), p) for p in VHDL_TESTBENCHES_TO_RUN]
 
-# Collect all testcases at collection time
 def collect_vhdl_tests():
     """
-    Return a list of tuples:
-    (testbench_full_path, testbench_relative_path, test_number, test_name)
+    Collect all VHDL tests as tuples:
+    (testbench_path, testbench_rel_path, test_number, test_name, passed)
     """
     testbenches = discover_vhdl_testbenches(BASE_DIR)
     all_tests = []
 
     for tb_path in testbenches:
-        # Determine relative path from configuration
-        rel_path = next((cfg for resolved, cfg in CONFIGURED_PATHS if resolved == tb_path), str(tb_path))
+        # Find the configured relative path for reporting
+        rel_path = next( (p for p in VHDL_TESTBENCHES_TO_RUN if p in str(tb_path)) )
+        rel_path = rel_path.replace("/", "::")
+        # rel_path = next((cfg for resolved, cfg in CONFIGURED_PATHS if resolved == tb_path), str(tb_path))
         result = get_simulation_result(tb_path)
 
         if result.tests:
             for t in result.tests:
                 all_tests.append((tb_path, rel_path, t.number, t.name, t.passed))
         else:
-            # No individual tests -> include as a single test
-            all_tests.append((tb_path, rel_path, None, None, result.return_code == 0))
+            # No individual tests → treat whole testbench as a single test
+            passed = result.return_code == 0 and not result.timed_out
+            all_tests.append((tb_path, rel_path, None, None, passed))
 
     return all_tests
 
-# Generate tests dynamically
 def pytest_generate_tests(metafunc):
     if "vhdl_test" in metafunc.fixturenames:
         all_tests = collect_vhdl_tests()
@@ -48,10 +51,16 @@ def test_vhdl(vhdl_test, request):
     """
     tb_path, rel_path, tnum, tname, passed = vhdl_test
 
-    # Override classname for JUnit XML
-    # This will appear as the "test suite" in the XML
-    request.node._nodeid = f"{rel_path}::{tname or 'simulation'}"
+    classname = rel_path
+    
+    # Override nodeid so pytest/junitxml shows the correct suite and test
+    test_name = tname if tname else "simulation"
+    request.node._nodeid = f"{rel_path}::{test_name}"
+    request.node.user_properties.append(("classname", classname))
+
+    # Attach classname for JUnit XML
+    request.node._report_sections = []
+    request.node.user_properties.append(("classname", classname))
 
     if not passed:
-        name = tname if tname else "simulation"
-        pytest.fail(f"{rel_path} -> Test {name} failed")
+        pytest.fail(f"{rel_path} -> Test {test_name} failed")
