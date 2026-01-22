@@ -16,8 +16,9 @@ architecture arch of tb is
   constant addr_byte_cnt: integer := 2;
   constant data_byte_cnt: integer := 2;
 
-  signal s_cmd           : nsl_amba.axi4_stream.bus_t;
-  signal s_rsp           : nsl_amba.axi4_stream.bus_t;
+  signal s_cmd     : nsl_amba.axi4_stream.bus_t;
+  signal s_rsp     : nsl_amba.axi4_stream.bus_t;
+  signal s_rsp_pre : nsl_amba.axi4_stream.bus_t;
 
   signal spi_master_s: nsl_spi.spi.spi_master_io;
   signal spi_slave_s: nsl_spi.spi.spi_slave_io;
@@ -63,16 +64,32 @@ begin
       
       cmd_i          => s_cmd.m,
       cmd_o          => s_cmd.s,
-      rsp_o          => s_rsp.m,
-      rsp_i          => s_rsp.s
+      rsp_o          => s_rsp_pre.m,
+      rsp_i          => s_rsp_pre.s
       );
-
+  
   spi_slave_s.i.cs_n <= cs_s_n(0).drain_n;
   spi_slave_s.i.mosi <= nsl_io.io.to_logic(mosi_s);
 
   miso_s <= nsl_io.io.to_logic(spi_slave_s.o.miso) when cs_s_n(0).drain_n = '0' else
             nsl_io.io.to_logic(mosi_s)             when cs_s_n(1).drain_n = '0' else
             'Z';
+  
+  rsp_pacer : nsl_amba.stream_traffic.axi4_stream_pacer
+    generic map(
+      config_c => cfg_c,
+      probability_c => 0.1
+      )
+  port map(
+    clock_i => s_clk,
+    reset_n_i => s_resetn,
+
+    in_i => s_rsp_pre.m,
+    in_o => s_rsp_pre.s,
+
+    out_o => s_rsp.m,
+    out_i => s_rsp.s
+    ); 
     
   slave: nsl_spi.slave.spi_memory_controller
     generic map(
@@ -139,33 +156,53 @@ begin
       );
  
   stim: process
+    variable check_status : boolean := false;
+    variable pass_count, fail_count : integer := 0;
   begin
 
     nsl_amba.axi4_stream.frame_queue_init(cmd_q);
     nsl_amba.axi4_stream.frame_queue_init(rsp_q);
-    
+
     -- Let FSM reach IDLE
     wait for 50 ns;
 
-    nsl_simulation.logging.log(level => nsl_simulation.logging.LOG_LEVEL_INFO, message => "Testing write to RAM: address 0x00, data 0xaa33", color => nsl_simulation.logging.LOG_COLOR_YELLOW);
+    nsl_simulation.logging.log(
+      level => nsl_simulation.logging.LOG_LEVEL_INFO,
+      message => "======================================",
+      color => nsl_simulation.logging.LOG_COLOR_CYAN
+    );
+    nsl_simulation.logging.log(
+      level => nsl_simulation.logging.LOG_LEVEL_INFO,
+      message => "SPI CBOR TRANSACTOR TEST SUITE",
+      color => nsl_simulation.logging.LOG_COLOR_CYAN
+    );
+    nsl_simulation.logging.log(
+      level => nsl_simulation.logging.LOG_LEVEL_INFO,
+      message => "======================================",
+      color => nsl_simulation.logging.LOG_COLOR_CYAN
+    );
+
     nsl_amba.axi4_stream.frame_queue_check_io(root_master => cmd_q,
                                               root_slave  => rsp_q,
                                               data1 => nsl_data.bytestream.from_suv(x"84820000c9430b0000c942aa33f6"),
                                               data2 => nsl_data.bytestream.from_suv(x"9fff"),
+                                              check_status => check_status,
                                               dt      => clock_period,
-                                              timeout => clock_period*2000000);
-    nsl_simulation.logging.log(level => nsl_simulation.logging.LOG_LEVEL_INFO, message => "=========== #0 WRITE to RAM successfull" & LF, color => nsl_simulation.logging.LOG_COLOR_GREEN);
+                                              timeout => clock_period*2000000,
+                                              sev     => warning);
+    nsl_simulation.logging.log_test_result("Write to RAM: address 0x00, data 0xaa33", check_status, pass_count, fail_count);
     
     wait for 10*clock_period;
     
-    nsl_simulation.logging.log(level => nsl_simulation.logging.LOG_LEVEL_INFO, message => "Testing read from RAM: address 0x00, expected data 0xaa33", color => nsl_simulation.logging.LOG_COLOR_YELLOW);
     nsl_amba.axi4_stream.frame_queue_check_io(root_master => cmd_q,
                                               root_slave  => rsp_q,
                                               data1 => nsl_data.bytestream.from_suv(x"84820000c943030000c810f6"),
-                                              data2 => nsl_data.bytestream.from_suv(x"9f4233aaff"), --this is wrong, should be aa33?
+                                              data2 => nsl_data.bytestream.from_suv(x"9f59000233aaff"),
+                                              check_status => check_status,
                                               dt      => clock_period,
-                                              timeout => clock_period*2000000);
-    nsl_simulation.logging.log(level => nsl_simulation.logging.LOG_LEVEL_INFO, message => "=========== #1 READ from RAM successfull" & LF, color => nsl_simulation.logging.LOG_COLOR_GREEN );
+                                              timeout => clock_period*2000000,
+                                              sev     => warning);
+    nsl_simulation.logging.log_test_result("Read from RAM: address 0x00, expected data 0xaa33", check_status, pass_count, fail_count);
 
     wait for 10*clock_period;
 
@@ -184,40 +221,238 @@ begin
     wait for 10*clock_period;
     -- test minus with bstr
     
-    nsl_simulation.logging.log(level => nsl_simulation.logging.LOG_LEVEL_INFO, message => "Testing 'minus' command", color => nsl_simulation.logging.LOG_COLOR_YELLOW);
     nsl_amba.axi4_stream.frame_queue_check_io(root_master => cmd_q,
                                               root_slave  => rsp_q,
                                               data1 => nsl_data.bytestream.from_suv(x"83820100c54155f6"),
-                                              data2 => nsl_data.bytestream.from_suv(x"9f02ff"),
+                                              data2 => nsl_data.bytestream.from_suv(x"9f59000103ff"),
+                                              check_status => check_status,
                                               dt      => clock_period,
-                                              timeout => clock_period*2000000);
-    nsl_simulation.logging.log(level => nsl_simulation.logging.LOG_LEVEL_INFO, message => "=========== #3 Test of command 'minus' successfull" & LF, color => nsl_simulation.logging.LOG_COLOR_GREEN );
+                                              timeout => clock_period*2000000,
+                                              sev     => warning);
+    nsl_simulation.logging.log_test_result("Test 'minus' command", check_status, pass_count, fail_count);
 
     wait for 10*clock_period;
     -- test shift_no_miso with minus 
     
-    nsl_simulation.logging.log(level => nsl_simulation.logging.LOG_LEVEL_INFO, message => "Testing 'minus' command with no MISO", color => nsl_simulation.logging.LOG_COLOR_YELLOW);
     nsl_amba.axi4_stream.frame_queue_check_io(root_master => cmd_q,
                                               root_slave  => rsp_q,
                                               data1 => nsl_data.bytestream.from_suv(x"83820100c9c241fff6"),
                                               data2 => nsl_data.bytestream.from_suv(x"9fff"),
+                                              check_status => check_status,
                                               dt      => clock_period,
-                                              timeout => clock_period*2000000);
-    nsl_simulation.logging.log(level => nsl_simulation.logging.LOG_LEVEL_INFO, message => "=========== #4 Test of command 'minus' without MISO successfull" & LF, color => nsl_simulation.logging.LOG_COLOR_GREEN );
+                                              timeout => clock_period*2000000,
+                                              sev     => warning);
+    nsl_simulation.logging.log_test_result("Test 'minus' command with no MISO", check_status, pass_count, fail_count);
 
-
-    
     wait for 10*clock_period;
-    -- test minus
 
-    
+    -- Test 5: Full byte shift with MISO capture on loopback (CS1)
+    -- Command: select CS1 mode 0, shift 0xaa, unselect
+    -- 83 = array(3), 82 01 00 = [1, 0], 41 aa = bstr(0xaa), f6 = null
+    -- Loopback returns same data
+    nsl_amba.axi4_stream.frame_queue_check_io(root_master => cmd_q,
+                                              root_slave  => rsp_q,
+                                              data1 => nsl_data.bytestream.from_suv(x"8382010041aaf6"),
+                                              data2 => nsl_data.bytestream.from_suv(x"9f590001aaff"),
+                                              check_status => check_status,
+                                              dt      => clock_period,
+                                              timeout => clock_period*2000000,
+                                              sev     => warning);
+    nsl_simulation.logging.log_test_result("Full byte shift with MISO on loopback", check_status, pass_count, fail_count);
+
     wait for 10*clock_period;
-    -- test minus    
-    
-    
-    -- wait for 1000 ns;                  
 
-    nsl_simulation.control.terminate(0);
+    -- Test 6: SPI Mode 1 (CPOL=0, CPHA=1) on loopback
+    -- 83 = array(3), 82 01 01 = [1, 1], 41 55 = bstr(0x55), f6 = null
+    nsl_amba.axi4_stream.frame_queue_check_io(root_master => cmd_q,
+                                              root_slave  => rsp_q,
+                                              data1 => nsl_data.bytestream.from_suv(x"838201014155f6"),
+                                              data2 => nsl_data.bytestream.from_suv(x"9f59000155ff"),
+                                              check_status => check_status,
+                                              dt      => clock_period,
+                                              timeout => clock_period*2000000,
+                                              sev     => warning);
+    nsl_simulation.logging.log_test_result("SPI Mode 1 shift on loopback", check_status, pass_count, fail_count);
+
+    wait for 10*clock_period;
+
+    -- Test 7: SPI Mode 2 (CPOL=1, CPHA=0) on loopback
+    -- 83 = array(3), 82 01 02 = [1, 2], 41 33 = bstr(0x33), f6 = null
+    nsl_amba.axi4_stream.frame_queue_check_io(root_master => cmd_q,
+                                              root_slave  => rsp_q,
+                                              data1 => nsl_data.bytestream.from_suv(x"838201024133f6"),
+                                              data2 => nsl_data.bytestream.from_suv(x"9f59000133ff"),
+                                              check_status => check_status,
+                                              dt      => clock_period,
+                                              timeout => clock_period*2000000,
+                                              sev     => warning);
+    nsl_simulation.logging.log_test_result("SPI Mode 2 shift on loopback", check_status, pass_count, fail_count);
+
+    wait for 10*clock_period;
+
+    -- Test 8: SPI Mode 3 (CPOL=1, CPHA=1) on loopback
+    -- 83 = array(3), 82 01 03 = [1, 3], 41 cc = bstr(0xcc), f6 = null
+    nsl_amba.axi4_stream.frame_queue_check_io(root_master => cmd_q,
+                                              root_slave  => rsp_q,
+                                              data1 => nsl_data.bytestream.from_suv(x"8382010341ccf6"),
+                                              data2 => nsl_data.bytestream.from_suv(x"9f590001ccff"),
+                                              check_status => check_status,
+                                              dt      => clock_period,
+                                              timeout => clock_period*2000000,
+                                              sev     => warning);
+    nsl_simulation.logging.log_test_result("SPI Mode 3 shift on loopback", check_status, pass_count, fail_count);
+
+    wait for 10*clock_period;
+
+    -- Test 9: Shift minus-1 (#6.1 = c1) on loopback - shift 7 bits
+    -- 83 = array(3), 82 01 00 = [1, 0], c1 41 aa = tag1(bstr(0xaa)), f6 = null
+    -- 0xaa = 10101010, shift 7 bits = 1010101 = 0x55
+    nsl_amba.axi4_stream.frame_queue_check_io(root_master => cmd_q,
+                                              root_slave  => rsp_q,
+                                              data1 => nsl_data.bytestream.from_suv(x"83820100c141aaf6"),
+                                              data2 => nsl_data.bytestream.from_suv(x"9f59000155ff"),
+                                              check_status => check_status,
+                                              dt      => clock_period,
+                                              timeout => clock_period*2000000,
+                                              sev     => warning);
+    nsl_simulation.logging.log_test_result("Shift minus-1 on loopback (7 bits)", check_status, pass_count, fail_count);
+
+    wait for 10*clock_period;
+
+    -- Test 10: Shift minus-2 (#6.2 = c2) on loopback - shift 6 bits
+    -- 83 = array(3), 82 01 00 = [1, 0], c2 41 ff = tag2(bstr(0xff)), f6 = null
+    -- 0xff = 11111111, shift 6 bits = 111111 = 0x3f
+    nsl_amba.axi4_stream.frame_queue_check_io(root_master => cmd_q,
+                                              root_slave  => rsp_q,
+                                              data1 => nsl_data.bytestream.from_suv(x"83820100c241fff6"),
+                                              data2 => nsl_data.bytestream.from_suv(x"9f5900013fff"),
+                                              check_status => check_status,
+                                              dt      => clock_period,
+                                              timeout => clock_period*2000000,
+                                              sev     => warning);
+    nsl_simulation.logging.log_test_result("Shift minus-2 on loopback (6 bits)", check_status, pass_count, fail_count);
+
+    wait for 10*clock_period;
+
+    -- Test 11: Shift minus-3 (#6.3 = c3) on loopback - shift 5 bits
+    -- 0xf0 = 11110000, shift 5 bits = 11110 = 0x1e
+    nsl_amba.axi4_stream.frame_queue_check_io(root_master => cmd_q,
+                                              root_slave  => rsp_q,
+                                              data1 => nsl_data.bytestream.from_suv(x"83820100c341f0f6"),
+                                              data2 => nsl_data.bytestream.from_suv(x"9f5900011eff"),
+                                              check_status => check_status,
+                                              dt      => clock_period,
+                                              timeout => clock_period*2000000,
+                                              sev     => warning);
+    nsl_simulation.logging.log_test_result("Shift minus-3 on loopback (5 bits)", check_status, pass_count, fail_count);
+
+    wait for 10*clock_period;
+
+    -- Test 12: Shift minus-4 (#6.4 = c4) on loopback - shift 4 bits
+    -- 0xab = 10101011, shift 4 bits = 1010 = 0x0a
+    nsl_amba.axi4_stream.frame_queue_check_io(root_master => cmd_q,
+                                              root_slave  => rsp_q,
+                                              data1 => nsl_data.bytestream.from_suv(x"83820100c441abf6"),
+                                              data2 => nsl_data.bytestream.from_suv(x"9f5900010aff"),
+                                              check_status => check_status,
+                                              dt      => clock_period,
+                                              timeout => clock_period*2000000,
+                                              sev     => warning);
+    nsl_simulation.logging.log_test_result("Shift minus-4 on loopback (4 bits)", check_status, pass_count, fail_count);
+
+    wait for 10*clock_period;
+
+    -- Test 13: Shift minus-6 (#6.6 = c6) on loopback - shift 2 bits
+    -- 0xc0 = 11000000, shift 2 bits = 11 = 0x03
+    nsl_amba.axi4_stream.frame_queue_check_io(root_master => cmd_q,
+                                              root_slave  => rsp_q,
+                                              data1 => nsl_data.bytestream.from_suv(x"83820100c641c0f6"),
+                                              data2 => nsl_data.bytestream.from_suv(x"9f59000103ff"),
+                                              check_status => check_status,
+                                              dt      => clock_period,
+                                              timeout => clock_period*2000000,
+                                              sev     => warning);
+    nsl_simulation.logging.log_test_result("Shift minus-6 on loopback (2 bits)", check_status, pass_count, fail_count);
+
+    wait for 10*clock_period;
+
+    -- Test 14: Shift minus-7 (#6.7 = c7) on loopback - shift 1 bit
+    -- 0x80 = 10000000, shift 1 bit = 1 = 0x01
+    nsl_amba.axi4_stream.frame_queue_check_io(root_master => cmd_q,
+                                              root_slave  => rsp_q,
+                                              data1 => nsl_data.bytestream.from_suv(x"83820100c74180f6"),
+                                              data2 => nsl_data.bytestream.from_suv(x"9f59000101ff"),
+                                              check_status => check_status,
+                                              dt      => clock_period,
+                                              timeout => clock_period*2000000,
+                                              sev     => warning);
+    nsl_simulation.logging.log_test_result("Shift minus-7 on loopback (1 bit)", check_status, pass_count, fail_count);
+
+    wait for 10*clock_period;
+
+    -- Test 15: Pause command (#6.10 = ca) between operations
+    -- 85 = array(5): select, shift, pause(50 ticks), shift, unselect
+    nsl_amba.axi4_stream.frame_queue_check_io(root_master => cmd_q,
+                                              root_slave  => rsp_q,
+                                              data1 => nsl_data.bytestream.from_suv(x"858201004112ca18324134f6"),
+                                              data2 => nsl_data.bytestream.from_suv(x"9f5900011259000134ff"),
+                                              check_status => check_status,
+                                              dt      => clock_period,
+                                              timeout => clock_period*2000000,
+                                              sev     => warning);
+    nsl_simulation.logging.log_test_result("Pause between shifts on loopback", check_status, pass_count, fail_count);
+
+    wait for 10*clock_period;
+
+    -- Test 16: Multi-byte shift on loopback
+    -- 83 = array(3), 82 01 00 = [1, 0], 43 aabbcc = bstr(3 bytes), f6 = null
+    nsl_amba.axi4_stream.frame_queue_check_io(root_master => cmd_q,
+                                              root_slave  => rsp_q,
+                                              data1 => nsl_data.bytestream.from_suv(x"8382010043aabbccf6"),
+                                              data2 => nsl_data.bytestream.from_suv(x"9f590003aabbccff"),
+                                              check_status => check_status,
+                                              dt      => clock_period,
+                                              timeout => clock_period*2000000,
+                                              sev     => warning);
+    nsl_simulation.logging.log_test_result("Multi-byte shift on loopback", check_status, pass_count, fail_count);
+
+    wait for 10*clock_period;
+
+    -- Test 17: Back-to-back shifts without unselect
+    -- 84 = array(4), select, shift1, shift2, unselect
+    nsl_amba.axi4_stream.frame_queue_check_io(root_master => cmd_q,
+                                              root_slave  => rsp_q,
+                                              data1 => nsl_data.bytestream.from_suv(x"8482010041114122f6"),
+                                              data2 => nsl_data.bytestream.from_suv(x"9f5900011159000122ff"),
+                                              check_status => check_status,
+                                              dt      => clock_period,
+                                              timeout => clock_period*2000000,
+                                              sev     => warning);
+    nsl_simulation.logging.log_test_result("Back-to-back shifts on loopback", check_status, pass_count, fail_count);
+
+    wait for 10*clock_period;
+
+    -- Test 18: Multi-CS operation: CS0 write then CS1 loopback
+    -- 86 = array(6): select CS0, write no-miso, unselect, select CS1, shift, unselect
+    nsl_amba.axi4_stream.frame_queue_check_io(root_master => cmd_q,
+                                              root_slave  => rsp_q,
+                                              data1 => nsl_data.bytestream.from_suv(x"86820000c9430b0001f68201004177f6"),
+                                              data2 => nsl_data.bytestream.from_suv(x"9f59000177ff"),
+                                              check_status => check_status,
+                                              dt      => clock_period,
+                                              timeout => clock_period*2000000,
+                                              sev     => warning);
+    nsl_simulation.logging.log_test_result("Multi-CS: write to RAM then loopback", check_status, pass_count, fail_count);
+
+    wait for 10*clock_period;
+
+    nsl_simulation.logging.log_test_suite_summary("SPI CBOR TRANSACTOR TESTS", pass_count, fail_count);
+
+    if fail_count > 0 then
+      nsl_simulation.control.terminate(1);
+    else
+      nsl_simulation.control.terminate(0);
+    end if;
   end process;
 
   cmd_queue: process

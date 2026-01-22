@@ -280,7 +280,12 @@ begin
         elsif nsl_data.cbor.kind(r.parser) = nsl_data.cbor.KIND_BSTR then
           -- nsl_simulation.logging.log(level => nsl_simulation.logging.LOG_LEVEL_INFO, color => nsl_simulation.logging.LOG_COLOR_BLUE, message => "Found KIND_BSTR");
           rin.word_count <= nsl_data.cbor.arg_int(r.parser) - 1;
-          rin.state      <= ST_DATA_GET;
+          if r.has_miso then                                                          
+            rin.state <= ST_RSP_BSTR_HDR_PREP;                                        
+          else                                                                        
+            rin.state <= ST_DATA_GET;                                                 
+          end if;                       
+          
           rin.has_mosi   <= true;
         end if;
 
