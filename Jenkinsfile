@@ -1,13 +1,16 @@
 pipeline {
     agent {
-        docker { image 'python:3.11' }
+        dockerfile true
+    }
+
+    triggers {
+        pollSCM('H * * * *')
     }
 
     stages {
-        stage('Checkout & Install') {
+        stage('Checkout') {
             steps {
                 checkout scm
-                sh 'pip install -r tests/requirements.txt'
             }
         }
 
