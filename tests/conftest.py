@@ -28,6 +28,7 @@ class VhdlTestResult:
     name: str
     passed: bool
     raw_line: str
+    log_context: str = ""  # Log lines around this test
 
 
 @dataclass
@@ -41,6 +42,47 @@ class VhdlSimulationResult:
     timed_out: bool = False
 
 
+def strip_ansi(text: str) -> str:
+    """Remove ANSI escape codes from text."""
+    ansi_escape = re.compile(r'\x1b\[[0-9;]*m')
+    return ansi_escape.sub('', text)
+
+
+def extract_test_log_context(output: str, test_number: int, context_lines: int = 20) -> str:
+    """
+    Extract log lines around a specific test result.
+
+    Returns lines from the previous test result (or start) up to and including
+    this test's result line, plus a few lines after for context.
+    """
+    lines = output.split('\n')
+
+    # Find the line with this test's result
+    test_pattern = re.compile(rf'========\s+Test\s+#{test_number}\s+(PASS|FAIL):')
+    prev_test_pattern = re.compile(r'========\s+Test\s+#(\d+)\s+(PASS|FAIL):')
+
+    result_line_idx = None
+    prev_test_line_idx = 0
+
+    for i, line in enumerate(lines):
+        if test_pattern.search(line):
+            result_line_idx = i
+            break
+        # Track where the previous test ended
+        match = prev_test_pattern.search(line)
+        if match and int(match.group(1)) == test_number - 1:
+            prev_test_line_idx = i + 1
+
+    if result_line_idx is None:
+        return ""
+
+    # Extract from previous test to this test + a few lines
+    start_idx = max(0, prev_test_line_idx)
+    end_idx = min(len(lines), result_line_idx + 5)
+
+    return '\n'.join(lines[start_idx:end_idx])
+
+
 def parse_vhdl_test_output(output: str) -> list[VhdlTestResult]:
     """
     Parse VHDL testbench output to extract individual test results.
@@ -51,9 +93,7 @@ def parse_vhdl_test_output(output: str) -> list[VhdlTestResult]:
 
     ANSI escape codes are stripped before parsing.
     """
-    # Strip ANSI escape codes
-    ansi_escape = re.compile(r'\x1b\[[0-9;]*m')
-    clean_output = ansi_escape.sub('', output)
+    clean_output = strip_ansi(output)
 
     # Match test result lines
     # Format: @<time> [INF/ERR] ======== Test #N PASS/FAIL: <name>
@@ -65,11 +105,13 @@ def parse_vhdl_test_output(output: str) -> list[VhdlTestResult]:
     results = []
     for match in pattern.finditer(clean_output):
         level, num, status, name = match.groups()
+        test_num = int(num)
         results.append(VhdlTestResult(
-            number=int(num),
+            number=test_num,
             name=name.strip(),
             passed=(status == "PASS"),
-            raw_line=match.group(0)
+            raw_line=match.group(0),
+            log_context=extract_test_log_context(clean_output, test_num)
         ))
 
     return results
@@ -185,36 +227,6 @@ def discover_vhdl_testbenches(base_dir: Path) -> list[Path]:
 
     return sorted(testbenches)
 
-    # """
-    # Discover VHDL testbench directories.
-
-    # A valid testbench directory contains:
-    # - A Makefile
-    # - A src/ subdirectory with tb.vhd or similar
-    # """
-    # testbenches = []
-
-    # for makefile in base_dir.rglob("Makefile"):
-    #     tb_dir = makefile.parent
-
-    #     # Skip if this is the top-level tests Makefile
-    #     if tb_dir == base_dir:
-    #         continue
-
-    #     # Skip src/ directories (those contain source Makefiles, not build Makefiles)
-    #     if tb_dir.name == "src":
-    #         continue
-
-    #     # Check if this looks like a testbench directory
-    #     # It should have a src/ subdir with VHDL files
-    #     src_dir = tb_dir / "src"
-    #     if src_dir.exists():
-    #         vhdl_files = list(src_dir.glob("*.vhd"))
-    #         if vhdl_files:
-    #             testbenches.append(tb_dir)
-
-    # return sorted(testbenches)
-
 
 # Cache for simulation results to avoid re-running
 _simulation_cache: dict[Path, VhdlSimulationResult] = {}
@@ -255,10 +267,21 @@ def vhdl_testbenches(tests_dir):
 
 # Test collection for VHDL tests
 
-def collect_vhdl_tests():
+@dataclass
+class VhdlTestInfo:
+    """Information about a single VHDL test for pytest."""
+    testbench_path: Path
+    classname: str
+    test_number: Optional[int]
+    test_name: Optional[str]
+    passed: bool
+    log_context: str
+    full_log: str
+
+
+def collect_vhdl_tests() -> list[VhdlTestInfo]:
     """
-    Collect all VHDL tests as tuples:
-    (testbench_path, classname, test_number, test_name, passed)
+    Collect all VHDL tests with their log context.
     """
     base_dir = Path(__file__).parent
     testbenches = discover_vhdl_testbenches(base_dir)
@@ -271,14 +294,31 @@ def collect_vhdl_tests():
         classname = rel_path.replace("/", ".")
 
         result = get_simulation_result(tb_path)
+        full_log = strip_ansi(result.stdout)
 
         if result.tests:
             for t in result.tests:
-                all_tests.append((tb_path, classname, t.number, t.name, t.passed))
+                all_tests.append(VhdlTestInfo(
+                    testbench_path=tb_path,
+                    classname=classname,
+                    test_number=t.number,
+                    test_name=t.name,
+                    passed=t.passed,
+                    log_context=t.log_context,
+                    full_log=full_log
+                ))
         else:
             # No individual tests -> treat whole testbench as a single test
             passed = result.return_code == 0 and not result.timed_out
-            all_tests.append((tb_path, classname, None, None, passed))
+            all_tests.append(VhdlTestInfo(
+                testbench_path=tb_path,
+                classname=classname,
+                test_number=None,
+                test_name=None,
+                passed=passed,
+                log_context="",
+                full_log=full_log
+            ))
 
     return all_tests
 
@@ -291,7 +331,8 @@ def pytest_generate_tests(metafunc):
             "vhdl_test",
             all_tests,
             ids=[
-                f"{classname}::{tnum:02d}_{tname.replace(' ', '_')}" if tname else f"{classname}::simulation"
-                for _, classname, tnum, tname, _ in all_tests
+                f"{t.classname}::{t.test_number:02d}_{t.test_name.replace(' ', '_')}"
+                if t.test_name else f"{t.classname}::simulation"
+                for t in all_tests
             ]
         )
