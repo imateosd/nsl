@@ -151,15 +151,15 @@ package body logging is
   procedure log_test_result(test_name : string; test_passed : boolean; pass_count : inout integer; fail_count : inout integer) is
     variable test_number : integer;
   begin
-                        
+
     test_number := pass_count + fail_count + 1;
-  
+
   if test_passed then
     pass_count := pass_count + 1;
-    log_info("Test #" & integer'image(test_number) & " PASS: " & test_name);
+    log(LOG_LEVEL_INFO, "======== Test #" & integer'image(test_number) & " PASS: " & test_name, LOG_COLOR_GREEN);
   else
     fail_count := fail_count + 1;
-    log_error("Test #" & integer'image(test_number) & " FAIL: " & test_name);
+    log_error("======== Test #" & integer'image(test_number) & " FAIL: " & test_name);
   end if;
   end procedure;
       
