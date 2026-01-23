@@ -97,92 +97,49 @@ def run_vhdl_simulation(testbench_dir: Path, timeout: int = 300) -> VhdlSimulati
         timeout=timeout
     )
 
+    # Try to parse test results from make output even if it returned non-zero,
+    # because make returns non-zero both for build failures AND simulation failures
+    # (when tests fail, simulation exits non-zero, causing make to fail)
+    tests = parse_vhdl_test_output(build_result.stdout)
+    if not tests and build_result.stderr:
+        tests = parse_vhdl_test_output(build_result.stderr)
+
     if build_result.returncode != 0:
-        print(f"[VHDL] Build FAILED (exit code {build_result.returncode})")
-        print(f"[VHDL] stderr: {build_result.stderr[:500]}")
-        return VhdlSimulationResult(
-            testbench_path=testbench_dir,
-            return_code=build_result.returncode,
-            stdout=build_result.stdout,
-            stderr=build_result.stderr,
-            tests=[],
-            timed_out=False
-        )
-
-    print(f"[VHDL] Build OK")
-
-    # Find the executable (usually named 'tb')
-    tb_executable = testbench_dir / "tb"
-    if not tb_executable.exists():
-        # Try to find any executable
-        for candidate in testbench_dir.iterdir():
-            if candidate.is_file() and candidate.stat().st_mode & 0o111:
-                if candidate.suffix not in ['.vhd', '.ghw', '.gtkw', '.mk', '.so']:
-                    tb_executable = candidate
-                    break
-
-    if not tb_executable.exists():
-        print(f"[VHDL] ERROR: No testbench executable found in {testbench_dir}")
-        return VhdlSimulationResult(
-            testbench_path=testbench_dir,
-            return_code=-1,
-            stdout="",
-            stderr=f"No testbench executable found in {testbench_dir}",
-            tests=[],
-            timed_out=False
-        )
-
-    print(f"[VHDL] Running simulation: {tb_executable}")
-
-    # Run the simulation
-    timed_out = False
-    try:
-        result = subprocess.run(
-            [str(tb_executable)],
-            cwd=testbench_dir,
-            capture_output=True,
-            text=True,
-            timeout=timeout
-        )
-        return_code = result.returncode
-        stdout = result.stdout
-        stderr = result.stderr
-    except subprocess.TimeoutExpired as e:
-        timed_out = True
-        return_code = -1
-        stdout = e.stdout.decode() if e.stdout else ""
-        stderr = e.stderr.decode() if e.stderr else ""
-
-    # Parse test results from output (try stdout first, then stderr)
-    tests = parse_vhdl_test_output(stdout)
-    if not tests and stderr:
-        # GHDL sometimes outputs to stderr
-        tests = parse_vhdl_test_output(stderr)
         if tests:
-            print(f"[VHDL] Note: test results found in stderr, not stdout")
+            # Simulation ran but some tests failed - this is fine, we have results
+            print(f"[VHDL] Build/simulation finished (exit code {build_result.returncode}), parsed {len(tests)} test results")
+            return VhdlSimulationResult(
+                testbench_path=testbench_dir,
+                return_code=build_result.returncode,
+                stdout=build_result.stdout,
+                stderr=build_result.stderr,
+                tests=tests,
+                timed_out=False
+            )
+        else:
+            # Actual build failure - no tests parsed
+            print(f"[VHDL] Build FAILED (exit code {build_result.returncode})")
+            print(f"[VHDL] stderr: {build_result.stderr[:500]}")
+            return VhdlSimulationResult(
+                testbench_path=testbench_dir,
+                return_code=build_result.returncode,
+                stdout=build_result.stdout,
+                stderr=build_result.stderr,
+                tests=[],
+                timed_out=False
+            )
 
-    print(f"[VHDL] Simulation finished (exit code {return_code}), parsed {len(tests)} test results")
-    if not tests:
-        print(f"[VHDL] WARNING: No test results parsed!")
-        print(f"[VHDL] stdout length: {len(stdout)} chars")
-        print(f"[VHDL] stderr length: {len(stderr)} chars")
-        # Print first few lines of both for debugging
-        if stdout:
-            print(f"[VHDL] First lines of stdout:")
-            for line in stdout.split('\n')[:5]:
-                print(f"[VHDL]   {line[:100]}")
-        if stderr:
-            print(f"[VHDL] First lines of stderr:")
-            for line in stderr.split('\n')[:5]:
-                print(f"[VHDL]   {line[:100]}")
+    # Make succeeded and simulation ran - parse and return results
+    # (make already ran the simulation as part of its default target)
+    print(f"[VHDL] Build and simulation OK, parsed {len(tests)} test results")
 
     return VhdlSimulationResult(
         testbench_path=testbench_dir,
-        return_code=return_code,
-        stdout=stdout,
-        stderr=stderr,
+        return_code=build_result.returncode,
+        stdout=build_result.stdout,
+        stderr=build_result.stderr,
         tests=tests,
-        timed_out=timed_out
+        timed_out=False
     )
 
 
