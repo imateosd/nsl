@@ -86,11 +86,12 @@ def run_vhdl_simulation(testbench_dir: Path, timeout: int = 300) -> VhdlSimulati
     Returns:
         VhdlSimulationResult with parsed test results
     """
-    print(f"[VHDL] Building testbench in {testbench_dir}")
+    print(f"[VHDL] Building and running testbench in {testbench_dir}")
 
-    # First, build the testbench
+    # Build and run the testbench
+    # Using 'make run' ensures simulation runs even if already built
     build_result = subprocess.run(
-        ["make"],
+        ["make", "run"],
         cwd=testbench_dir,
         capture_output=True,
         text=True,
