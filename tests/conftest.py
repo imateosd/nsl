@@ -86,6 +86,8 @@ def run_vhdl_simulation(testbench_dir: Path, timeout: int = 300) -> VhdlSimulati
     Returns:
         VhdlSimulationResult with parsed test results
     """
+    print(f"[VHDL] Building testbench in {testbench_dir}")
+
     # First, build the testbench
     build_result = subprocess.run(
         ["make"],
@@ -96,6 +98,8 @@ def run_vhdl_simulation(testbench_dir: Path, timeout: int = 300) -> VhdlSimulati
     )
 
     if build_result.returncode != 0:
+        print(f"[VHDL] Build FAILED (exit code {build_result.returncode})")
+        print(f"[VHDL] stderr: {build_result.stderr[:500]}")
         return VhdlSimulationResult(
             testbench_path=testbench_dir,
             return_code=build_result.returncode,
@@ -104,6 +108,8 @@ def run_vhdl_simulation(testbench_dir: Path, timeout: int = 300) -> VhdlSimulati
             tests=[],
             timed_out=False
         )
+
+    print(f"[VHDL] Build OK")
 
     # Find the executable (usually named 'tb')
     tb_executable = testbench_dir / "tb"
@@ -116,6 +122,7 @@ def run_vhdl_simulation(testbench_dir: Path, timeout: int = 300) -> VhdlSimulati
                     break
 
     if not tb_executable.exists():
+        print(f"[VHDL] ERROR: No testbench executable found in {testbench_dir}")
         return VhdlSimulationResult(
             testbench_path=testbench_dir,
             return_code=-1,
@@ -124,6 +131,8 @@ def run_vhdl_simulation(testbench_dir: Path, timeout: int = 300) -> VhdlSimulati
             tests=[],
             timed_out=False
         )
+
+    print(f"[VHDL] Running simulation: {tb_executable}")
 
     # Run the simulation
     timed_out = False
@@ -144,8 +153,28 @@ def run_vhdl_simulation(testbench_dir: Path, timeout: int = 300) -> VhdlSimulati
         stdout = e.stdout.decode() if e.stdout else ""
         stderr = e.stderr.decode() if e.stderr else ""
 
-    # Parse test results from output
+    # Parse test results from output (try stdout first, then stderr)
     tests = parse_vhdl_test_output(stdout)
+    if not tests and stderr:
+        # GHDL sometimes outputs to stderr
+        tests = parse_vhdl_test_output(stderr)
+        if tests:
+            print(f"[VHDL] Note: test results found in stderr, not stdout")
+
+    print(f"[VHDL] Simulation finished (exit code {return_code}), parsed {len(tests)} test results")
+    if not tests:
+        print(f"[VHDL] WARNING: No test results parsed!")
+        print(f"[VHDL] stdout length: {len(stdout)} chars")
+        print(f"[VHDL] stderr length: {len(stderr)} chars")
+        # Print first few lines of both for debugging
+        if stdout:
+            print(f"[VHDL] First lines of stdout:")
+            for line in stdout.split('\n')[:5]:
+                print(f"[VHDL]   {line[:100]}")
+        if stderr:
+            print(f"[VHDL] First lines of stderr:")
+            for line in stderr.split('\n')[:5]:
+                print(f"[VHDL]   {line[:100]}")
 
     return VhdlSimulationResult(
         testbench_path=testbench_dir,
@@ -264,3 +293,47 @@ def tests_dir():
 def vhdl_testbenches(tests_dir):
     """Discover all VHDL testbenches."""
     return discover_vhdl_testbenches(tests_dir)
+
+
+# Test collection for VHDL tests
+
+def collect_vhdl_tests():
+    """
+    Collect all VHDL tests as tuples:
+    (testbench_path, classname, test_number, test_name, passed)
+    """
+    base_dir = Path(__file__).parent
+    testbenches = discover_vhdl_testbenches(base_dir)
+    all_tests = []
+
+    for tb_path in testbenches:
+        # Find the configured relative path for reporting
+        rel_path = next((p for p in VHDL_TESTBENCHES_TO_RUN if p in str(tb_path)))
+        # Use dots for classname (Java package style, what Jenkins expects)
+        classname = rel_path.replace("/", ".")
+
+        result = get_simulation_result(tb_path)
+
+        if result.tests:
+            for t in result.tests:
+                all_tests.append((tb_path, classname, t.number, t.name, t.passed))
+        else:
+            # No individual tests -> treat whole testbench as a single test
+            passed = result.return_code == 0 and not result.timed_out
+            all_tests.append((tb_path, classname, None, None, passed))
+
+    return all_tests
+
+
+def pytest_generate_tests(metafunc):
+    """Parametrize vhdl_test fixture with all discovered VHDL tests."""
+    if "vhdl_test" in metafunc.fixturenames:
+        all_tests = collect_vhdl_tests()
+        metafunc.parametrize(
+            "vhdl_test",
+            all_tests,
+            ids=[
+                f"{classname}::{tnum:02d}_{tname.replace(' ', '_')}" if tname else f"{classname}::simulation"
+                for _, classname, tnum, tname, _ in all_tests
+            ]
+        )

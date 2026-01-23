@@ -18,7 +18,7 @@ pipeline {
             steps {
                 sh '''
                     mkdir -p tests/reports
-                    pytest tests/ --junitxml=tests/reports/pytest-results.xml
+                    pytest tests/ -v -s --junitxml=tests/reports/pytest-results.xml
                 '''
             }
         }
