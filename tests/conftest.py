@@ -117,6 +117,47 @@ def parse_vhdl_test_output(output: str) -> list[VhdlTestResult]:
     return results
 
 
+def get_reports_dir() -> Path:
+    """Get the reports directory, creating it if needed."""
+    reports_dir = Path(__file__).parent / "reports" / "logs"
+    reports_dir.mkdir(parents=True, exist_ok=True)
+    return reports_dir
+
+
+def save_simulation_log(testbench_dir: Path, stdout: str, stderr: str) -> Path:
+    """Save simulation output to a log file."""
+    reports_dir = get_reports_dir()
+
+    # Create a filename from the testbench path (e.g., i2c_cbor_full_test.log)
+    base_dir = Path(__file__).parent
+    try:
+        rel_path = testbench_dir.relative_to(base_dir)
+        log_name = str(rel_path).replace("/", "_").replace("\\", "_") + ".log"
+    except ValueError:
+        log_name = testbench_dir.name + ".log"
+
+    log_path = reports_dir / log_name
+
+    # Write the log with both stdout and stderr
+    with open(log_path, 'w') as f:
+        f.write("=" * 70 + "\n")
+        f.write(f"VHDL Simulation Log: {testbench_dir}\n")
+        f.write("=" * 70 + "\n\n")
+
+        f.write("-" * 70 + "\n")
+        f.write("STDOUT:\n")
+        f.write("-" * 70 + "\n")
+        f.write(strip_ansi(stdout) if stdout else "(empty)\n")
+
+        if stderr:
+            f.write("\n" + "-" * 70 + "\n")
+            f.write("STDERR:\n")
+            f.write("-" * 70 + "\n")
+            f.write(strip_ansi(stderr))
+
+    return log_path
+
+
 def run_vhdl_simulation(testbench_dir: Path, timeout: int = 300) -> VhdlSimulationResult:
     """
     Build and run a VHDL simulation.
@@ -139,6 +180,10 @@ def run_vhdl_simulation(testbench_dir: Path, timeout: int = 300) -> VhdlSimulati
         text=True,
         timeout=timeout
     )
+
+    # Save the full simulation log to a file
+    log_path = save_simulation_log(testbench_dir, build_result.stdout, build_result.stderr)
+    print(f"[VHDL] Log saved to: {log_path}")
 
     # Try to parse test results from make output even if it returned non-zero,
     # because make returns non-zero both for build failures AND simulation failures

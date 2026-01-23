@@ -27,6 +27,7 @@ pipeline {
     post {
         always {
             junit 'tests/reports/pytest-results.xml'
+            archiveArtifacts artifacts: 'tests/reports/logs/*.log', allowEmptyArchive: true
         }
     }
 }
