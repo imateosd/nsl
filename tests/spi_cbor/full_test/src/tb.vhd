@@ -224,7 +224,7 @@ begin
     nsl_amba.axi4_stream.frame_queue_check_io(root_master => cmd_q,
                                               root_slave  => rsp_q,
                                               data1 => nsl_data.bytestream.from_suv(x"83820100c54155f6"),
-                                              data2 => nsl_data.bytestream.from_suv(x"9f59000103ff"),
+                                              data2 => nsl_data.bytestream.from_suv(x"9f59000102ff"),
                                               check_status => check_status,
                                               dt      => clock_period,
                                               timeout => clock_period*2000000,
