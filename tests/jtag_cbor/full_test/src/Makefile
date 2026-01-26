@@ -7,6 +7,7 @@ deps += nsl_simulation.driver
 deps += nsl_simulation.logging
 deps += nsl_amba.axi4_mm
 deps += nsl_amba.ram
+deps += nsl_amba.stream_traffic
 deps += nsl_amba.stream_to_udp
 deps += nsl_amba.stream_fifo
 deps += nsl_data.bytestream
