@@ -107,6 +107,7 @@ architecture rtl of controller is
     state         : state_t;
 
     cmd           : std_ulogic_vector(7 downto 0);
+    cmd_sent      : std_ulogic_vector(7 downto 0);
     cycle         : natural range 0 to 3;
     data          : std_ulogic_vector(31 downto 0);
 
@@ -122,6 +123,7 @@ architecture rtl of controller is
 
     ack           : std_ulogic_vector(2 downto 0);
     turnaround    : natural range 0 to 3;
+    wait_cycles   : natural range 0 to 128;
     cycle_count   : natural range 0 to 256;
     word_count    : natural range 0 to 31;
     word_total    : natural range 0 to 31;
@@ -180,7 +182,7 @@ architecture rtl of controller is
     end case;
   end;
   
-  constant c_print_logs : boolean := true;
+  constant c_print_logs : boolean := false;
   
   procedure log_state_change(r : regs_t; rin: regs_t) is  begin
     if c_print_logs then
@@ -252,6 +254,7 @@ architecture rtl of controller is
         end if;
         
       when others =>
+        
     end case;
 
     case r.state is
@@ -290,7 +293,7 @@ architecture rtl of controller is
       when ST_ARRAY_ENTER =>
         if nsl_data.cbor.kind(r.parser) = nsl_data.cbor.KIND_ARRAY then
           if not r.parser.indefinite then
-            nsl_simulation.logging.log_info("r.command_count set to " & nsl_data.text.to_string(nsl_data.cbor.arg_int(r.parser)));
+            -- nsl_simulation.logging.log_info("r.command_count set to " & nsl_data.text.to_string(nsl_data.cbor.arg_int(r.parser)));
             rin.command_count <= nsl_data.cbor.arg_int(r.parser);
             rin.indefinite    <= false;
           else
@@ -334,7 +337,7 @@ architecture rtl of controller is
         elsif nsl_data.cbor.kind(r.parser) = nsl_data.cbor.KIND_POSITIVE then
           if not r.inside_cmd then
             -- SWD_RUN
-            nsl_simulation.logging.log_info("Received command to SWD_RUN, going to ST_RUN for " & nsl_data.text.to_string(nsl_data.cbor.arg_int(r.parser)) & " cycles");
+            -- nsl_simulation.logging.log_info("Received command to SWD_RUN, going to ST_RUN for " & nsl_data.text.to_string(nsl_data.cbor.arg_int(r.parser)) & " cycles");
             rin.inside_cmd <= false;
             rin.cycle_count <= nsl_data.cbor.arg_int(r.parser) - 1;
             if not r.cmd_cancelled then
@@ -346,7 +349,7 @@ architecture rtl of controller is
             if 0 <= r.tag and r.tag < 8 then
               -- it's a read. the register to read is indicated by the tag and
               -- the number indicates the count of words to read
-              nsl_simulation.logging.log_info("Received command to SWD_READ, going to ST_CMD_SHIFT via ST_RSP_READ_HDR_PREP/PUT ");
+              -- nsl_simulation.logging.log_info("Received command to SWD_READ, going to ST_CMD_SHIFT via ST_RSP_READ_HDR_PREP/PUT ");
               rin.is_read <= true;
               if r.tag < 4 then
                 rin.cmd <= swd_cmd(reg => r.tag, ap => false, read => true);
@@ -360,7 +363,7 @@ architecture rtl of controller is
               rin.word_count <= nsl_data.cbor.arg_int(r.parser);
               rin.word_total <= nsl_data.cbor.arg_int(r.parser);
 
-              nsl_simulation.logging.log_info("r.word_total = r.word_count = " & nsl_data.text.to_string(nsl_data.cbor.arg_int(r.parser)) );
+              -- nsl_simulation.logging.log_info("r.word_total = r.word_count = " & nsl_data.text.to_string(nsl_data.cbor.arg_int(r.parser)) );
 
               rin.cycle_count <= 7;
               if not r.cmd_cancelled then
@@ -370,9 +373,16 @@ architecture rtl of controller is
               end if;
               
             elsif r.tag = 8 then
-              nsl_simulation.logging.log_info("Updated turnaround value with received value");
+              -- nsl_simulation.logging.log_info("Updated turnaround value with received value");
               rin.turnaround <= nsl_data.cbor.arg_int(r.parser)-1;
               rin.inside_cmd <= false;
+
+              rin.state <= ST_CMD_END;
+            elsif r.tag = 10 then
+              -- nsl_simulation.logging.log_info("Updated cycles to wait
+              -- between operations with received value");
+              rin.wait_cycles <= nsl_data.cbor.arg_int(r.parser)-1;
+              rin.inside_cmd  <= false;
 
               rin.state <= ST_CMD_END;
             else
@@ -383,8 +393,8 @@ architecture rtl of controller is
           if r.inside_cmd then
             if 0 <= r.tag and r.tag < 8 then
               -- it's a write. the register to read is indicated by the tag
-              nsl_simulation.logging.log_info("Received command to write to a register");
-              nsl_simulation.logging.log_info("Will write " & nsl_data.text.to_string(nsl_data.cbor.arg_int(r.parser)) & " bytes");
+              -- nsl_simulation.logging.log_info("Received command to write to a register");
+              -- nsl_simulation.logging.log_info("Will write " & nsl_data.text.to_string(nsl_data.cbor.arg_int(r.parser)) & " bytes");
               rin.is_read <= false;
               if r.tag < 4 then
                 rin.cmd <= swd_cmd(reg => r.tag, ap => false, read => false);
@@ -395,7 +405,7 @@ architecture rtl of controller is
               rin.word_count <= nsl_data.cbor.arg_int(r.parser)/4;
               rin.word_total <= nsl_data.cbor.arg_int(r.parser)/4;
 
-              nsl_simulation.logging.log_info("r.word_total = r.word_count = " & nsl_data.text.to_string(nsl_data.cbor.arg_int(r.parser)/4) );
+              -- nsl_simulation.logging.log_info("r.word_total = r.word_count = " & nsl_data.text.to_string(nsl_data.cbor.arg_int(r.parser)/4) );
               
               rin.par_in <= '0';
               rin.par_out <= '0';
@@ -441,7 +451,6 @@ architecture rtl of controller is
         end if;
       
       when ST_CMD_END =>
-        -- nsl_simulation.logging.log_info("in ST_CMD_END");
         if not r.indefinite and r.command_count = 0 then
           rin.cmd_cancelled <= false;
           rin.state <= ST_RSP_BREAK_PREP;
@@ -453,7 +462,6 @@ architecture rtl of controller is
         rin.is_bitbang <= false;
         
       when ST_CMD_SHIFT =>
-        -- nsl_simulation.logging.log_info("in ST_CMD_SHIFT");
         if swclk_falling then
           rin.swd.dio.v <= r.cmd(0);
           rin.swd.dio.output <= '1';
@@ -468,7 +476,6 @@ architecture rtl of controller is
         end if;
 
       when ST_CMD_TURNAROUND =>
-        -- nsl_simulation.logging.log_info("in ST_CMD_TURNAROUND");
         if swclk_falling then
           rin.swd.dio.output <= '0';
           rin.swd.dio.v <= '-';
@@ -482,7 +489,6 @@ architecture rtl of controller is
         end if;
 
       when ST_ACK_SHIFT =>
-        -- nsl_simulation.logging.log_info("in ST_ACK_SHIFT");
         if swclk_falling then
           rin.swd.dio.output <= '0';
           rin.swd.dio.v <= '-';
@@ -512,7 +518,6 @@ architecture rtl of controller is
         end if;
 
       when ST_ACK_TURNAROUND =>
-        -- nsl_simulation.logging.log_info("in ST_ACK_TURNAROUND");
         if swclk_falling then
           rin.swd.dio.output <= '0';
           rin.swd.dio.v <= '-';
@@ -552,12 +557,7 @@ architecture rtl of controller is
           if r.cycle_count /= 0 then
             rin.cycle_count <= r.cycle_count - 1;
           else
-            if r.word_count = 0 then
-              rin.state <= ST_PARITY_SHIFT_OUT;
-            else
-              rin.cycle_count <= 31;
-              rin.state <= ST_DATA_GET;
-            end if;
+            rin.state <= ST_PARITY_SHIFT_OUT;
           end if;
         end if;
 
@@ -566,8 +566,14 @@ architecture rtl of controller is
           rin.swd.dio.output <= '1';
           rin.swd.dio.v <= r.par_out;
         elsif swclk_rising then
-          rin.state <= ST_RSP_WRITE_STATUS_PREP;
-          rin.cycle_count <= 1;
+          if r.word_count = 0 then
+            rin.state <= ST_RSP_WRITE_STATUS_PREP;
+            rin.cycle_count <= rin.wait_cycles;
+          else
+              rin.cycle_count <= 7;
+              rin.cmd <= r.cmd_sent;
+              rin.state <= ST_CMD_SHIFT;
+          end if;
         end if;
 
       when ST_DATA_SHIFT_IN =>
@@ -603,7 +609,7 @@ architecture rtl of controller is
             rin.cycle_count <= r.cycle_count - 1;
           else
             rin.state <= ST_RUN;
-            rin.cycle_count <= 1;
+            rin.cycle_count <= r.wait_cycles;
           end if;
         end if;
 
@@ -683,10 +689,9 @@ architecture rtl of controller is
         end if;
 
       when ST_RSP_WRITE_STATUS_PREP =>
-        -- nsl_simulation.logging.log_info("ST_RSP_WRITE_STATUS_PREP");
-        nsl_simulation.logging.log_info("r.word_total - r.word_count = " & nsl_data.text.to_string(r.word_total - r.word_count) );
-        nsl_simulation.logging.log_info("r.word_total = " & nsl_data.text.to_string(r.word_total) );
-        nsl_simulation.logging.log_info("r.word_count = " & nsl_data.text.to_string(r.word_count) );
+        -- nsl_simulation.logging.log_info("r.word_total - r.word_count = " & nsl_data.text.to_string(r.word_total - r.word_count) );
+        -- nsl_simulation.logging.log_info("r.word_total = " & nsl_data.text.to_string(r.word_total) );
+        -- nsl_simulation.logging.log_info("r.word_count = " & nsl_data.text.to_string(r.word_count) );
         status(3) := r.par_in;
         status(2 downto 0) := r.ack;
         rin.encoded <= nsl_amba.axi4_stream.reset(buffer_cfg_c,
@@ -709,9 +714,9 @@ architecture rtl of controller is
         end if;
     
       when ST_RSP_READ_STATUS_PREP =>
-        nsl_simulation.logging.log_info("r.word_total - r.word_count = " & nsl_data.text.to_string(r.word_total - r.word_count) );
-        nsl_simulation.logging.log_info("r.word_total = " & nsl_data.text.to_string(r.word_total) );
-        nsl_simulation.logging.log_info("r.word_count = " & nsl_data.text.to_string(r.word_count) );
+        -- nsl_simulation.logging.log_info("r.word_total - r.word_count = " & nsl_data.text.to_string(r.word_total - r.word_count) );
+        -- nsl_simulation.logging.log_info("r.word_total = " & nsl_data.text.to_string(r.word_total) );
+        -- nsl_simulation.logging.log_info("r.word_count = " & nsl_data.text.to_string(r.word_count) );
         if is_x(r.par_in) then -- TODO is this correct?
           status(3) := '0';
         else

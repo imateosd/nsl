@@ -293,7 +293,8 @@ begin
                           shift_arb_ok_i)
     begin
       rin <= r;
-
+      clr_timeout_cnt_s <= '0';
+  
       if clocker_ready_i = '1' then
         rin.owned <= clocker_owned_i;
       end if;
@@ -461,7 +462,6 @@ begin
           end if;
         
         when ST_READ_RUN =>
-          clr_timeout_cnt_s <= '0';
           if clocker_ready_i = '1' then
             rin.state <= ST_READ_DATA;
           end if;

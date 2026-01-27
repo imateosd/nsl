@@ -159,8 +159,6 @@ begin
   begin
     rin <= r;
 
-    rin.last <= false;
-
     case r.state is
       
       when ST_RESET =>
