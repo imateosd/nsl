@@ -18,7 +18,10 @@ import pytest
 # Paths are relative to the tests root (where conftest.py lives)
 VHDL_TESTBENCHES_TO_RUN = [
     "i2c_cbor/full_test",
-    "spi_cbor/full_test"
+    "spi_cbor/full_test",
+    "jtag_cbor/full_test",
+    "swd_cbor/full_test",
+    "uart_cbor/full_test"
 ]
 
 @dataclass

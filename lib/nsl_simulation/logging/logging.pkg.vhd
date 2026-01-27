@@ -42,6 +42,7 @@ package logging is
   procedure log_error(context: log_context; message : string);
   procedure log_fatal(context: log_context; message : string);
 
+  procedure log_test_suite_start(suite_name : string);
   procedure log_test_result(test_name : string; test_passed : boolean; pass_count : inout integer; fail_count : inout integer);
   procedure log_test_suite_summary(suite_name : string; pass_count : integer; fail_count : integer);
 
