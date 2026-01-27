@@ -8,13 +8,13 @@ use nsl_data.cbor.all;
 entity controller is
   generic(
     clock_i_hz_c : natural;
-    tick_i_hz_c  : natural;
     axi_s_cfg_c  : nsl_amba.axi4_stream.config_t
     );
   port (
     reset_n_i    : in  std_ulogic;
     clock_i      : in  std_ulogic;
 
+    tick_i_hz    : in natural;
     tick_i       : in std_ulogic;
 
     cmd_i        : in nsl_amba.axi4_stream.master_t;
@@ -32,7 +32,6 @@ architecture rtl of controller is
   constant data_max_size_c      : natural := 8;
   constant cbr_hdr_max_size_c   : natural := 9;
   constant buffer_cfg_c         : nsl_amba.axi4_stream.buffer_config_t := nsl_amba.axi4_stream.buffer_config(axi_s_cfg_c, cbr_hdr_max_size_c);
-  constant tick_cycles_per_ms_c : natural := tick_i_hz_c / 2000;
 
   type state_t is (
     ST_RESET,
@@ -72,7 +71,8 @@ architecture rtl of controller is
     has_tdi       : boolean;
     data          : std_ulogic_vector(7 downto 0);
     bit_count     : natural range 0 to 7;
-    word_count    : natural range 0 to 4095;
+    word_count    : natural range 0 to 1023;
+    tick_per_ms   : integer;
     
     parser        : nsl_data.cbor.parser_t;
     indefinite    : boolean;
@@ -187,6 +187,7 @@ begin
           rin.parser <= nsl_data.cbor.feed(r.parser, cmd_i.data(0));
           if nsl_data.cbor.is_last( r.parser, cmd_i.data(0) ) then
             rin.state <= ST_ARRAY_ENTER;
+            rin.tick_per_ms <= tick_i_hz / 2000;
           end if;
         end if;
 
@@ -269,7 +270,7 @@ begin
             nsl_simulation.logging.log_info("Running ATE_OP_RTI for " & nsl_data.text.to_string(nsl_data.cbor.arg_int(r.parser)) & "ms");
             nsl_simulation.logging.log_info("tick_i_hz_c : " & nsl_data.text.to_string(tick_i_hz_c) & " Hz");
             nsl_simulation.logging.log_info("word count set to " & nsl_data.text.to_string(nsl_data.cbor.arg_int(r.parser) * tick_i_hz_c / 1000));
-            rin.word_count  <= nsl_data.cbor.arg_int(r.parser) * tick_cycles_per_ms_c;
+            rin.word_count  <= nsl_data.cbor.arg_int(r.parser) * r.tick_per_ms;
             rin.cmd_bit_count <= 0;
             rin.cmd_pending <= nsl_jtag.ate.ATE_OP_RTI;
             rin.state       <= ST_ATE_RUN;

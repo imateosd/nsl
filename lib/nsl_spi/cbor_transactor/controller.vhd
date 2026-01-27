@@ -8,7 +8,6 @@ use nsl_data.cbor.all;
 entity controller is
   generic(
     clock_i_hz_c  : natural;
-    tick_i_hz_c   : natural;
     axi_s_cfg_c   : nsl_amba.axi4_stream.config_t;
     slave_count_c : natural range 1 to 7 := 1;
     width_c       : natural := 7-- TODO what should the range be here?
@@ -17,6 +16,7 @@ entity controller is
     clock_i   : in std_ulogic;
     reset_n_i : in std_ulogic;
 
+    tick_i_hz : in natural;
     tick_i    : in std_ulogic;
 
     sck_o     : out std_ulogic;
