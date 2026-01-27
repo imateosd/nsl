@@ -37,6 +37,39 @@ package transactor is
       );
   end component;
 
+  component uart8_no_generics is
+    generic(
+      stop_count_c : natural range 1 to 2 := 1
+      );
+    port(
+      reset_n_i    : in std_ulogic;
+      clock_i      : in std_ulogic;
+
+      divisor_i   : in unsigned;
+      
+      tx_o   : out std_ulogic;
+      cts_i  : in  std_ulogic := '0';
+      rx_i   : in  std_ulogic;
+      rts_o  : out std_ulogic;
+
+      -- Resync/deglitched raw signals
+      cts_o  : out std_ulogic;
+      rx_o   : out std_ulogic;
+
+      tx_data_i  : in  nsl_bnoc.pipe.pipe_req_t;
+      tx_data_o  : out nsl_bnoc.pipe.pipe_ack_t;
+      rx_data_i  : in  nsl_bnoc.pipe.pipe_ack_t;
+      rx_data_o  : out nsl_bnoc.pipe.pipe_req_t;
+
+      parity_error_o : out std_ulogic;
+      break_o        : out std_ulogic;
+
+      stop_count       : in unsigned(1 downto 0);
+      parity           : in unsigned(1 downto 0);
+      handshake_active : in std_ulogic := '0'
+      );
+  end component;
+
   component cbor_controller is
     generic(
       system_clock_c     : natural;
@@ -46,7 +79,7 @@ package transactor is
       handshake_active_c : std_ulogic := '0';
       divisor_c          : unsigned(0 to 31);
       timeout_c          : unsigned(0 to 31);
-      tstr_max_size_c    : natural
+      bstr_max_size_c    : natural
       );
     port (
       reset_n_i    : in std_ulogic;
