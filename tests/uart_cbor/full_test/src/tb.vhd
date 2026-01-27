@@ -7,7 +7,6 @@ library nsl_uart, nsl_amba, nsl_data, nsl_simulation;
 entity tb is
 end;
 
-
 architecture arch of tb is
   constant c_clock_period : time := 10 ns;
   constant c_cfg : nsl_amba.axi4_stream.config_t := nsl_amba.axi4_stream.config(bytes => 1, last => true);
@@ -37,7 +36,7 @@ begin
       handshake_active_c => '0',
       divisor_c => to_unsigned(10416, 32), -- 9600 bds
       timeout_c => to_unsigned(2000, 32), -- timeout in bit time
-      tstr_max_size_c => 12
+      bstr_max_size_c => 12
       )
     port map(
       reset_n_i => s_rst_n,
@@ -71,56 +70,89 @@ begin
       );
   
   stim: process
+    variable check_status : boolean := false;
+    variable pass_count, fail_count : integer := 0;
   begin
+    s_uart.cts <= '0';
 
     nsl_amba.axi4_stream.frame_queue_init(cmd_q);
     nsl_amba.axi4_stream.frame_queue_init(rsp_q);
-    
+
     -- Let FSM reach IDLE
     wait for 50 ns;
 
-    nsl_simulation.logging.log(level => nsl_simulation.logging.LOG_LEVEL_INFO,
-                               message => "Testing setting configuration",
-                               color => nsl_simulation.logging.LOG_COLOR_BLUE);
-    nsl_amba.axi4_stream.frame_queue_put(root => cmd_q,
-                                         data => nsl_data.bytestream.from_suv(x"A369666C6F772D6374726C6363747366706172697479616569626175642D72617465192d00"));
+    nsl_simulation.logging.log(
+      level => nsl_simulation.logging.LOG_LEVEL_INFO,
+      message => "======================================",
+      color => nsl_simulation.logging.LOG_COLOR_CYAN
+    );
+    nsl_simulation.logging.log(
+      level => nsl_simulation.logging.LOG_LEVEL_INFO,
+      message => "UART CBOR TRANSACTOR TEST SUITE",
+      color => nsl_simulation.logging.LOG_COLOR_CYAN
+    );
+    nsl_simulation.logging.log(
+      level => nsl_simulation.logging.LOG_LEVEL_INFO,
+      message => "======================================",
+      color => nsl_simulation.logging.LOG_COLOR_CYAN
+    );
+    -- nsl_amba.axi4_stream.frame_queue_put(root => cmd_q,
+    --                                      data => nsl_data.bytestream.from_suv(x"A369666C6F772D6374726C6363747366706172697479616569626175642D72617465192d00"));
     -- There's no response to this command, so the configuration changes would
     -- need to be asserted. Can't do that from here.
     -- assert()
-    wait for 80 ns;
-    nsl_simulation.logging.log(level => nsl_simulation.logging.LOG_LEVEL_INFO,
-                               message => "============================================== #0 CONFIGURATION SUCCESSFULLY SET" & LF,
-                               color => nsl_simulation.logging.LOG_COLOR_GREEN);   
+    -- wait for 80 ns;
+    -- nsl_simulation.logging.log(level => nsl_simulation.logging.LOG_LEVEL_INFO,
+    --                            message => "============================================== #0 CONFIGURATION SUCCESSFULLY SET" & LF,
+    --                            color => nsl_simulation.logging.LOG_COLOR_GREEN);   
 
-
-    nsl_simulation.logging.log(level => nsl_simulation.logging.LOG_LEVEL_INFO,
-                               message => "Sending a message",
-                               color => nsl_simulation.logging.LOG_COLOR_BLUE);
     nsl_amba.axi4_stream.frame_queue_check_io(root_master => cmd_q,
                                               root_slave  => rsp_q,
-                                              data1 => nsl_data.bytestream.from_suv(x"6C48656C6C6F20776F726C6421"),
-                                              data2 => nsl_data.bytestream.from_suv(x"6C48656C6C6F20776F726C6421"),
+                                              data1 => nsl_data.bytestream.from_suv(x"A369666C6F772D6374726C6363747366706172697479616569626175642D72617465192580"),
+                                              data2 => nsl_data.bytestream.from_suv(x"F5"),
+                                              check_status => check_status,
                                               dt      => c_clock_period,
-                                              timeout => c_clock_period*1500000);
-    nsl_simulation.logging.log(level => nsl_simulation.logging.LOG_LEVEL_INFO,
-                               message => "============================================== #1 MESSAGE SENT AND RECEIVED SUCCESSFULLY" & LF,
-                               color => nsl_simulation.logging.LOG_COLOR_GREEN);    
+                                              timeout => c_clock_period*1500000,
+                                              sev     => warning);
+    nsl_simulation.logging.log_test_result("Set configuration", check_status, pass_count, fail_count);   
+    
 
-    nsl_simulation.logging.log(level => nsl_simulation.logging.LOG_LEVEL_INFO,
-                               message => "Recovering block config",
-                               color => nsl_simulation.logging.LOG_COLOR_BLUE);
+    nsl_amba.axi4_stream.frame_queue_check_io(root_master => cmd_q,
+                                              root_slave  => rsp_q,
+                                              data1 => nsl_data.bytestream.from_suv(x"4C48656C6C6F20776F726C6421"),
+                                              data2 => nsl_data.bytestream.from_suv(x"59000C48656C6C6F20776F726C6421"),
+                                              check_status => check_status,
+                                              dt      => c_clock_period,
+                                              timeout => c_clock_period*1500000,
+                                              sev     => warning);
+    nsl_simulation.logging.log_test_result("Send and receive message", check_status, pass_count, fail_count);    
+
+    nsl_amba.axi4_stream.frame_queue_check(root => rsp_q,
+                                           data => nsl_data.bytestream.from_suv(x"f5"),
+                                           check_status => check_status,
+                                           dt      => c_clock_period,
+                                           timeout => c_clock_period*1500000,
+                                           sev     => warning);
+    nsl_simulation.logging.log_test_result("Receive confirmation of message sent", check_status, pass_count, fail_count);    
+
     nsl_amba.axi4_stream.frame_queue_check_io(root_master => cmd_q,
                                               root_slave  => rsp_q,
                                               data1 => nsl_data.bytestream.from_suv(x"F6"),
-                                              data2 => nsl_data.bytestream.from_suv(x"A369666C6F772D6374726C6363747366706172697479616569626175642D72617465192d00"),
+                                              data2 => nsl_data.bytestream.from_suv(x"A369666C6F772D6374726C6363747366706172697479616569626175642D726174651a00002580"),
+                                              check_status => check_status,
                                               dt      => c_clock_period,
-                                              timeout => c_clock_period*1500000);
-    nsl_simulation.logging.log(level => nsl_simulation.logging.LOG_LEVEL_INFO,
-                               message => "============================================== #2 CONFIGURATION RETRIEVED SUCCESSFULLY" & LF,
-                               color => nsl_simulation.logging.LOG_COLOR_GREEN);    
- 
+                                              timeout => c_clock_period*1500000,
+                                              sev     => warning);
+    nsl_simulation.logging.log_test_result("Retrieve configuration", check_status, pass_count, fail_count);    
 
-    nsl_simulation.control.terminate(0);
+
+    nsl_simulation.logging.log_test_suite_summary("UART CBOR TRANSACTOR TESTS", pass_count, fail_count);
+
+    if fail_count > 0 then
+      nsl_simulation.control.terminate(1);
+    else
+      nsl_simulation.control.terminate(0);
+    end if;
   end process;
 
   cmd_queue: process

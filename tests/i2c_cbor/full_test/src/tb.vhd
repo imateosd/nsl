@@ -270,21 +270,7 @@ begin
     nsl_amba.axi4_stream.frame_queue_init(cmd_q);
     nsl_amba.axi4_stream.frame_queue_init(rsp_q);
 
-    nsl_simulation.logging.log(
-      level => nsl_simulation.logging.LOG_LEVEL_INFO,
-      message => "======================================",
-      color => nsl_simulation.logging.LOG_COLOR_CYAN
-    );
-    nsl_simulation.logging.log(
-      level => nsl_simulation.logging.LOG_LEVEL_INFO,
-      message => "I2C CBOR TRANSACTOR TEST SUITE",
-      color => nsl_simulation.logging.LOG_COLOR_CYAN
-    );
-    nsl_simulation.logging.log(
-      level => nsl_simulation.logging.LOG_LEVEL_INFO,
-      message => "======================================",
-      color => nsl_simulation.logging.LOG_COLOR_CYAN
-    );
+    nsl_simulation.logging.log_test_suite_start("I2C CBOR TRANSACTOR TEST SUITE");
 
     -- Test 0: Write to clocked slave
     nsl_amba.axi4_stream.frame_queue_check_io(

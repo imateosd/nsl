@@ -38,16 +38,17 @@ architecture arch of tb is
   signal s_address : unsigned(8*addr_byte_cnt-1 downto 0);
 
   signal   tick_s      : std_ulogic;
+  signal   tick_i_hz_s : natural := 1;
   constant tick_divisor: unsigned(7 downto 0) := (others => '1');
 
   shared variable cmd_q, rsp_q: nsl_amba.axi4_stream.frame_queue_root_t;  
 begin
 
+  tick_i_hz_s <= 10e7/to_integer(tick_divisor);
   
   dut: nsl_spi.cbor_transactor.controller
     generic map(
       clock_i_hz_c   => 10e7,
-      tick_i_hz_c    => 10e7/to_integer(tick_divisor),
       axi_s_cfg_c    => cfg_c,
       slave_count_c  => 2
       )
@@ -55,6 +56,7 @@ begin
       clock_i        => s_clk,
       reset_n_i      => s_resetn,
 
+      tick_i_hz      => tick_i_hz_s,
       tick_i         => tick_s,
       
       sck_o          => spi_slave_s.i.sck,
@@ -64,8 +66,10 @@ begin
       
       cmd_i          => s_cmd.m,
       cmd_o          => s_cmd.s,
-      rsp_o          => s_rsp_pre.m,
-      rsp_i          => s_rsp_pre.s
+      rsp_o          => s_rsp.m,
+      rsp_i          => s_rsp.s
+      -- rsp_o          => s_rsp_pre.m,
+      -- rsp_i          => s_rsp_pre.s
       );
   
   spi_slave_s.i.cs_n <= cs_s_n(0).drain_n;
@@ -75,21 +79,21 @@ begin
             nsl_io.io.to_logic(mosi_s)             when cs_s_n(1).drain_n = '0' else
             'Z';
   
-  rsp_pacer : nsl_amba.stream_traffic.axi4_stream_pacer
-    generic map(
-      config_c => cfg_c,
-      probability_c => 0.1
-      )
-  port map(
-    clock_i => s_clk,
-    reset_n_i => s_resetn,
+  -- rsp_pacer : nsl_amba.stream_traffic.axi4_stream_pacer
+  --   generic map(
+  --     config_c => cfg_c,
+  --     probability_c => 0.1
+  --     )
+  -- port map(
+  --   clock_i => s_clk,
+  --   reset_n_i => s_resetn,
 
-    in_i => s_rsp_pre.m,
-    in_o => s_rsp_pre.s,
+  --   in_i => s_rsp_pre.m,
+  --   in_o => s_rsp_pre.s,
 
-    out_o => s_rsp.m,
-    out_i => s_rsp.s
-    ); 
+  --   out_o => s_rsp.m,
+  --   out_i => s_rsp.s
+  --   ); 
     
   slave: nsl_spi.slave.spi_memory_controller
     generic map(
