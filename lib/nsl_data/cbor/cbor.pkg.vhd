@@ -309,20 +309,18 @@ package body cbor is
                        arg_width_l2: integer range -1 to 3)
     return byte_string
   is
-    constant sarg : unsigned := unpad(argument);
-    constant xarg : unsigned(sarg'length-1 downto 0) := sarg;
     constant maj_suv : std_ulogic_vector := std_ulogic_vector(to_unsigned(major, 3));
   begin
     if arg_width_l2 = -1 then
-      return (0 => maj_suv & std_ulogic_vector(resize(xarg, 5)));
+      return (0 => maj_suv & std_ulogic_vector(resize(argument, 5)));
     elsif arg_width_l2 = 0 then
-      return from_suv(maj_suv & "11000") & to_be(resize(xarg, 8));
+      return from_suv(maj_suv & "11000") & to_be(resize(argument, 8));
     elsif arg_width_l2 = 1 then
-      return from_suv(maj_suv & "11001") & to_be(resize(xarg, 16));
+      return from_suv(maj_suv & "11001") & to_be(resize(argument, 16));
     elsif arg_width_l2 = 2  then
-      return from_suv(maj_suv & "11010") & to_be(resize(xarg, 32));
+      return from_suv(maj_suv & "11010") & to_be(resize(argument, 32));
     elsif arg_width_l2 = 3  then
-      return from_suv(maj_suv & "11011") & to_be(resize(xarg, 64));
+      return from_suv(maj_suv & "11011") & to_be(resize(argument, 64));
     end if;
   end function;
 
