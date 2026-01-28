@@ -234,11 +234,15 @@ begin
                                               sev     => warning);
     nsl_simulation.logging.log_test_result("Minus with no TDO", check_status, pass_count, fail_count);
 
-    -- Test 3: Run for ms (no response expected)
-    nsl_amba.axi4_stream.frame_queue_put(root => cmd_q,
-                                         data => nsl_data.bytestream.from_suv(x"81CB03"));
-    wait for 3 ms;
-    check_status := true;  -- No response to check, assume pass
+    -- Test 4: Run for 3ms (response is empty indefinite array 9fff)
+    nsl_amba.axi4_stream.frame_queue_check_io(root_master => cmd_q,
+                                              root_slave  => rsp_q,
+                                              data1 => nsl_data.bytestream.from_suv(x"81CB03"),
+                                              data2 => nsl_data.bytestream.from_suv(x"9fff"),
+                                              check_status => check_status,
+                                              dt      => clock_period,
+                                              timeout => clock_period*2000000 + 4 ms,
+                                              sev     => warning);
     nsl_simulation.logging.log_test_result("Run for 3ms", check_status, pass_count, fail_count);
    
     -- nsl_simulation.logging.log(level => nsl_simulation.logging.LOG_LEVEL_INFO, message => "Testing Chain enum", color => nsl_simulation.logging.LOG_COLOR_BLUE);
@@ -251,18 +255,133 @@ begin
     --                                           timeout => clock_period*2000000);
     -- nsl_simulation.logging.log(level => nsl_simulation.logging.LOG_LEVEL_INFO, message => "==================================================================================== #1 CMD-RSP CHECK PASSED" & LF, color => nsl_simulation.logging.LOG_COLOR_GREEN);
 
+    -- Test 5 (Large shift)
+    -- nsl_amba.axi4_stream.frame_queue_check_io(root_master => cmd_q,
+    --                                           root_slave  => rsp_q,
+    --                                           data1 => nsl_data.bytestream.from_suv(x"9fc95900ffE8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8ff"),
+    --                                           data2 => nsl_data.bytestream.from_suv(x"9fff"),
+    --                                           check_status => check_status,
+    --                                           dt      => clock_period,
+    --                                           timeout => clock_period*2000000 + 4 ms,
+    --                                           sev     => warning);
+    -- nsl_simulation.logging.log_test_result("Large shift operation", check_status, pass_count, fail_count);
+
+    wait for 100 us;
+
+    -- Test 6: Read 16 bits of IDCODE (similar to test 1 but fewer bits)
+    -- Command: reset(6), run(2), ir-capture, shift-no-tdo(0x11=IDCODE), run(3), dr-capture, shift_cycles(16)
+    -- 87 = array(7), ca06 = reset(6), 02 = run(2), e2 = ir-capture, c94111 = shift-no-tdo(0x11),
+    -- 03 = run(3), e1 = dr-capture, c810 = shift_cycles(16)
     nsl_amba.axi4_stream.frame_queue_check_io(root_master => cmd_q,
                                               root_slave  => rsp_q,
-                                              data1 => nsl_data.bytestream.from_suv(x"9fc95903ffd4e8e8e8e8e8e80454d400e8e8e8e8e8e8e8e8e8e8e8e8e8e8e8e8e8e8e89348ffffffffffffffffffffff0fd4e8e8e8e8e8e8e8e8e8e8e8e8e8e8e8e8e8540001d4e8e8e8e8e8e81054d400e8e8e8e8e8e8e8e8e8e8e8e8e8e8e8e8e8e8e82cb5ffffffffffffffffffffff0f0200e8e8e8e8e8e8e8e8e8e8e8e8e8e8e8e8e8e8e8e8e8e8e8e8e8e8e8e8e8e8e8e8e8e8e8e8e8e8e8e8e8e8e8d440540493a0ffffffffffffffffffffff0fd4e8e8e8e8e8e8e8e8e8e8e8e8e8e8e8e8e8e8e8e8e8e8e8e8e8e8e8e8e8e8e8e8e8e8e8e8e8e8e8e8e8e854d4006003d40002200100f00fffffffffffffffffffffff0f0200e8e8e8e8e8e8e8e8e8e8e8e8e8e8e8e8e8540001d4e8e8e8e8e8e8e8e8e8e8e8e8e8e8e8e8e8e8e8e8e8e8e8e8e80454d404aa41ffffffffffffffffffffff0fd4e8e8e8e8e8e8e8e8e8e8e8e8e8e8e8e8e8540001d4e8e8e8e8e8e8e8e8e8e8e8e8e8e8e8e8e8e8e8e8e8e8e8e8e80154800200c7fdffffffffffffffffffffff0fd4e8e8e8e8e8e8e8e8e8e8e8e8e8e8e8e8e8e8e8e8e8e8e8e8e8e8e8e8e8e8e8e8e8e8e8e8e8e8e8e8e8e854d4008002d40001d4002c45ffffffffffffffffffffff0fd4e8e8e8e8e8e8e8e8e8e8e8e8e8e8e8e8e8e8e8e8e8e8e8e8e8e8e8e8e8e8e8e8e8e8e8e8e8e8e8e8e8e8e8004002d4c0d4c47cffffffffffffffffffffff0fd4e8e8e8e8e8e8e8e8e8e8e8e8e8e8e8e8e8540001d4e8e8e8e8e8e8e8e8e8e8e8e8e8e8e8e8e8e8e8e8e8e8e8e8e854d402005758ffffffffffffffffffffff0fd4e8e8e8e8e8e8e8e8e8e8e8e8e8e8e8e8e8e8e8e8e8e8e8e8e8e8e8e8e8e8e8e8e8e8e8e8e8e8e8e8e8e8e8d406d40004009777ffffffffffffffffffffff0fd4e8e8e8e8e8e8e8e8e8e8e8e8e8e8e8e8e8540001d4e8e8e8e8e8e8e8e8e8e8e8e8e8e8e8e8e8e8e8e8e8e8e8e8e8e8b992ffffffffffffffffffffff0fd4e8e8e8e8e8e8e8e8e8e8e8e8d4245400e8d401d4000c00e8e8540002d4e8e8e8e8e8e8e8e8e8e8e8e8e8e8e8e8e8e8e8e8e8e8e8e8e80030d4001ef8000e93ffffffffffffffffffffff0fd4e8e8e8e8e8e8e8e8e8e8e8e8e8e85400800800e8e8540002d4e8e8e8e8e8e8e8e8e8e8e8e8e8e8e8e8e8e8e8e8e8e8e8e8e80002d400024800444fffffffffffffffffffffff0fd4e8e8e8e8e8e8e8e8e8e8e8e8d4085400e8d4045400e8e8540001d4e8e8e8e8e8e8e8e8e8e8e8e8e8e8e8e8e8e8e8e8e8e8e8e8e8540008200001b1ffffffffffffffffffffff0fd4e8e8e8e8e8e8e8e8e8e8e8e8d4205400e8e8e8e8540002d4e8e8e8e8e8e8e8e8e8e8e8e8e8e8e8e8e8e8e8e8e8e8e8e8e80010d40012d49e22ffffffffffffffffffffff0fd4e8e8e8e8e8e8e8e8e8e8e8e8e8e8e8e8e8540001d45408d400e8e8e8e8e8e8e8e8e8e8e8e8e8ff"),
-                                              -- data1 => nsl_data.bytestream.from_suv(x"81c95903ffd4e8e8e8e8e8e80454d400e8e8e8e8e8e8e8e8e8e8e8e8e8e8e8e8e8e8e89348ffffffffffffffffffffff0fd4e8e8e8e8e8e8e8e8e8e8e8e8e8e8e8e8e8540001d4e8e8e8e8e8e81054d400e8e8e8e8e8e8e8e8e8e8e8e8e8e8e8e8e8e8e82cb5ffffffffffffffffffffff0f0200e8e8e8e8e8e8e8e8e8e8e8e8e8e8e8e8e8e8e8e8e8e8e8e8e8e8e8e8e8e8e8e8e8e8e8e8e8e8e8e8e8e8e8d440540493a0ffffffffffffffffffffff0fd4e8e8e8e8e8e8e8e8e8e8e8e8e8e8e8e8e8e8e8e8e8e8e8e8e8e8e8e8e8e8e8e8e8e8e8e8e8e8e8e8e8e854d4006003d40002200100f00fffffffffffffffffffffff0f0200e8e8e8e8e8e8e8e8e8e8e8e8e8e8e8e8e8540001d4e8e8e8e8e8e8e8e8e8e8e8e8e8e8e8e8e8e8e8e8e8e8e8e8e80454d404aa41ffffffffffffffffffffff0fd4e8e8e8e8e8e8e8e8e8e8e8e8e8e8e8e8e8540001d4e8e8e8e8e8e8e8e8e8e8e8e8e8e8e8e8e8e8e8e8e8e8e8e8e80154800200c7fdffffffffffffffffffffff0fd4e8e8e8e8e8e8e8e8e8e8e8e8e8e8e8e8e8e8e8e8e8e8e8e8e8e8e8e8e8e8e8e8e8e8e8e8e8e8e8e8e8e854d4008002d40001d4002c45ffffffffffffffffffffff0fd4e8e8e8e8e8e8e8e8e8e8e8e8e8e8e8e8e8e8e8e8e8e8e8e8e8e8e8e8e8e8e8e8e8e8e8e8e8e8e8e8e8e8e8004002d4c0d4c47cffffffffffffffffffffff0fd4e8e8e8e8e8e8e8e8e8e8e8e8e8e8e8e8e8540001d4e8e8e8e8e8e8e8e8e8e8e8e8e8e8e8e8e8e8e8e8e8e8e8e8e854d402005758ffffffffffffffffffffff0fd4e8e8e8e8e8e8e8e8e8e8e8e8e8e8e8e8e8e8e8e8e8e8e8e8e8e8e8e8e8e8e8e8e8e8e8e8e8e8e8e8e8e8e8d406d40004009777ffffffffffffffffffffff0fd4e8e8e8e8e8e8e8e8e8e8e8e8e8e8e8e8e8540001d4e8e8e8e8e8e8e8e8e8e8e8e8e8e8e8e8e8e8e8e8e8e8e8e8e8e8b992ffffffffffffffffffffff0fd4e8e8e8e8e8e8e8e8e8e8e8e8d4245400e8d401d4000c00e8e8540002d4e8e8e8e8e8e8e8e8e8e8e8e8e8e8e8e8e8e8e8e8e8e8e8e8e80030d4001ef8000e93ffffffffffffffffffffff0fd4e8e8e8e8e8e8e8e8e8e8e8e8e8e85400800800e8e8540002d4e8e8e8e8e8e8e8e8e8e8e8e8e8e8e8e8e8e8e8e8e8e8e8e8e80002d400024800444fffffffffffffffffffffff0fd4e8e8e8e8e8e8e8e8e8e8e8e8d4085400e8d4045400e8e8540001d4e8e8e8e8e8e8e8e8e8e8e8e8e8e8e8e8e8e8e8e8e8e8e8e8e8540008200001b1ffffffffffffffffffffff0fd4e8e8e8e8e8e8e8e8e8e8e8e8d4205400e8e8e8e8540002d4e8e8e8e8e8e8e8e8e8e8e8e8e8e8e8e8e8e8e8e8e8e8e8e8e80010d40012d49e22ffffffffffffffffffffff0fd4e8e8e8e8e8e8e8e8e8e8e8e8e8e8e8e8e8540001d45408d400e8e8e8e8e8e8e8e8e8e8e8e8e8"),
-                                              -- data1 => nsl_data.bytestream.from_suv(x"81c947d4e8e8e8e8e8e8"),
-                                              -- data1 => nsl_data.bytestream.from_suv(x"9fc947d4e8e8e8e8e8e8ff"),
+                                              data1 => nsl_data.bytestream.from_suv(x"87ca0602e2c9411103e1c810"),
+                                              data2 => nsl_data.bytestream.from_suv(x"9f5900022143ff"),
+                                              check_status => check_status,
+                                              dt      => clock_period,
+                                              timeout => clock_period*2000000,
+                                              sev     => warning);
+    nsl_simulation.logging.log_test_result("IDCODE read (16 bits)", check_status, pass_count, fail_count);
+
+    wait for 100 us;
+
+    -- Test 7: BYPASS mode
+    -- Command: reset(6), run(2), ir-capture, shift-no-tdo(0x0F=BYPASS), run(3), dr-capture, shift_cycles(8)
+    -- BYPASS is a 1-bit register, shift 8 bits of zeros (shift_cycles with no TDI data)
+    -- 87 = array(7), ca06 = reset(6), 02 = run(2), e2 = ir-capture, c9410f = shift-no-tdo(0x0F),
+    -- 03 = run(3), e1 = dr-capture, c808 = shift_cycles(8)
+    -- Response: bstr with 1 byte = 0x00 (shifted zeros through BYPASS)
+    nsl_amba.axi4_stream.frame_queue_check_io(root_master => cmd_q,
+                                              root_slave  => rsp_q,
+                                              data1 => nsl_data.bytestream.from_suv(x"87ca0602e2c9410f03e1c808"),
+                                              data2 => nsl_data.bytestream.from_suv(x"9f59000100ff"),
+                                              check_status => check_status,
+                                              dt      => clock_period,
+                                              timeout => clock_period*2000000,
+                                              sev     => warning);
+    nsl_simulation.logging.log_test_result("BYPASS mode (8 cycles)", check_status, pass_count, fail_count);
+
+    wait for 100 us;
+
+    -- Test 8: Shift minus-7 (#6.7) - shift only 1 bit from a byte
+    -- After BYPASS is still loaded, do dr-capture, then shift 1 bit
+    -- c7 = tag7 (minus-7), 41aa = bstr(1 byte: 0xaa), only 1 bit shifted (8-7=1)
+    -- 83 = array(3), e1 = dr-capture, c741aa = minus-7(bstr(0xaa)), 00 = run(0)
+    -- Response: bstr with 1 byte, TDO depends on BYPASS state
+    nsl_amba.axi4_stream.frame_queue_check_io(root_master => cmd_q,
+                                              root_slave  => rsp_q,
+                                              data1 => nsl_data.bytestream.from_suv(x"83e1c741aa00"),
+                                              data2 => nsl_data.bytestream.from_suv(x"9f59000154ff"),
+                                              check_status => check_status,
+                                              dt      => clock_period,
+                                              timeout => clock_period*2000000,
+                                              sev     => warning);
+    nsl_simulation.logging.log_test_result("Shift minus-7 (1 bit)", check_status, pass_count, fail_count);
+
+    wait for 100 us;
+
+    -- Test 9: Shift minus-4 (#6.4) - shift 4 bits from a byte
+    -- c4 = tag4 (minus-4), 41aa = bstr(1 byte: 0xaa), shifts 4 bits (8-4=4)
+    -- 83 = array(3), e1 = dr-capture, c441aa = minus-4(bstr(0xaa)), 00 = run(0)
+    -- Response: bstr with 1 byte, TDO depends on BYPASS state
+    nsl_amba.axi4_stream.frame_queue_check_io(root_master => cmd_q,
+                                              root_slave  => rsp_q,
+                                              data1 => nsl_data.bytestream.from_suv(x"83e1c441aa00"),
+                                              data2 => nsl_data.bytestream.from_suv(x"9f59000104ff"),
+                                              check_status => check_status,
+                                              dt      => clock_period,
+                                              timeout => clock_period*2000000,
+                                              sev     => warning);
+    nsl_simulation.logging.log_test_result("Shift minus-4 (4 bits)", check_status, pass_count, fail_count);
+
+    wait for 100 us;
+
+    -- Test 10: IR scan with TDO capture (not using shift-no-tdo)
+    -- Reset, run, ir-capture, shift IR with TDO capture (not c9 tagged)
+    -- 85 = array(5), ca06 = reset(6), 02 = run(2), e2 = ir-capture, 4111 = bstr(0x11), 00 = run(0)
+    -- Response: bstr with captured IR output = 0x01 (default IR value after reset is 0x02,
+    -- shifted out LSB first during IR scan, giving captured value 0x01)
+    nsl_amba.axi4_stream.frame_queue_check_io(root_master => cmd_q,
+                                              root_slave  => rsp_q,
+                                              data1 => nsl_data.bytestream.from_suv(x"85ca0602e2411100"),
+                                              data2 => nsl_data.bytestream.from_suv(x"9f59000101ff"),
+                                              check_status => check_status,
+                                              dt      => clock_period,
+                                              timeout => clock_period*2000000,
+                                              sev     => warning);
+    nsl_simulation.logging.log_test_result("IR scan with TDO capture", check_status, pass_count, fail_count);
+
+    wait for 100 us;
+
+    -- Test 11: Extended reset cycles (larger count)
+    -- 82 = array(2), ca1864 = reset(100 cycles), 00 = run(0)
+    -- Response: empty (9fff)
+    nsl_amba.axi4_stream.frame_queue_check_io(root_master => cmd_q,
+                                              root_slave  => rsp_q,
+                                              data1 => nsl_data.bytestream.from_suv(x"82ca186400"),
                                               data2 => nsl_data.bytestream.from_suv(x"9fff"),
                                               check_status => check_status,
                                               dt      => clock_period,
                                               timeout => clock_period*2000000,
                                               sev     => warning);
-    nsl_simulation.logging.log_test_result("Large shift operation", check_status, pass_count, fail_count);
+    nsl_simulation.logging.log_test_result("Extended reset (100 cycles)", check_status, pass_count, fail_count);
+
+    wait for 100 us;
+
+    -- Test 12: Back-to-back DR shifts (multiple shifts in one command)
+    -- Reset, run, load IDCODE, run, dr-capture, shift 8 bits x3, run
+    -- 8a = array(10), ca06 = reset(6), 02 = run(2), e2 = ir-capture, c94111 = shift-no-tdo(0x11),
+    -- 03 = run(3), e1 = dr-capture, c808 = shift_cycles(8), c808, c808, 00 = run(0)
+    -- Response: 3 bstr entries (each 1 byte with 2-byte length encoding)
+    -- IDCODE = 0x87654321, shifted LSB first: 0x21, 0x43, 0x65
+    nsl_amba.axi4_stream.frame_queue_check_io(root_master => cmd_q,
+                                              root_slave  => rsp_q,
+                                              data1 => nsl_data.bytestream.from_suv(x"8aca0602e2c9411103e1c808c808c80800"),
+                                              data2 => nsl_data.bytestream.from_suv(x"9f590001215900014359000165ff"),
+                                              check_status => check_status,
+                                              dt      => clock_period,
+                                              timeout => clock_period*2000000,
+                                              sev     => warning);
+    nsl_simulation.logging.log_test_result("Back-to-back DR shifts", check_status, pass_count, fail_count);
 
     wait for 5 ms;
 
