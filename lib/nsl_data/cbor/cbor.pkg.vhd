@@ -90,8 +90,9 @@ package cbor is
   -- Serializes a tag item. Contained item may be concatenated after.
   function cbor_tag_hdr(value: natural) return byte_string;
   function cbor_tag_hdr(value: unsigned) return byte_string;  
-  -- Serializes a byte string header. Contained bytes may be concatenated after.
-  function cbor_bstr_hdr(length: natural) return byte_string;
+  -- Serializes a byte string header (indefinite if negative or default). 
+  -- Contained bytes may be concatenated after.
+  function cbor_bstr_hdr(length: integer := -1) return byte_string;
   function cbor_bstr_hdr(length: unsigned; width: integer := -1) return byte_string;  
   -- Serializes a text string header. Contained characters may be concatenated after.
   function cbor_tstr_hdr(length: natural) return byte_string;
@@ -470,10 +471,14 @@ package body cbor is
     end if;
   end function;
   
-  function cbor_bstr_hdr(length: natural) return byte_string
+  function cbor_bstr_hdr(length: integer := -1) return byte_string
   is
   begin
-    return item_encode(2, to_unsigned_auto(length));
+    if length < 0 then
+      return item_encode_undef(2);
+    else
+      return item_encode(2, to_unsigned_auto(length));
+    end if;
   end function;
 
   function cbor_tstr_hdr(length: unsigned) return byte_string
