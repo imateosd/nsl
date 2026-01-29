@@ -192,7 +192,7 @@ begin
       when ST_ARRAY_ENTER =>
         if nsl_data.cbor.kind(r.parser) = nsl_data.cbor.KIND_ARRAY then
           if not r.parser.indefinite then
-            nsl_simulation.logging.log_info("r.command_count set to " & nsl_data.text.to_string(nsl_data.cbor.arg_int(r.parser)));
+            -- nsl_simulation.logging.log_info("r.command_count set to " & nsl_data.text.to_string(nsl_data.cbor.arg_int(r.parser)));
             rin.command_count <= nsl_data.cbor.arg_int(r.parser);
             rin.indefinite    <= false;
           else
@@ -243,31 +243,31 @@ begin
         
         elsif nsl_data.cbor.kind(r.parser) = nsl_data.cbor.KIND_POSITIVE then
           if r.tag = 0 then -- not inside a tag!!
-            nsl_simulation.logging.log_info("Running ATE_OP_RTI for " & nsl_data.text.to_string(nsl_data.cbor.arg_int(r.parser)) & " cycles");
+--            nsl_simulation.logging.log_info("Running ATE_OP_RTI for " & nsl_data.text.to_string(nsl_data.cbor.arg_int(r.parser)) & " cycles");
             rin.cmd_bit_count <= 0;
             rin.word_count  <= nsl_data.cbor.arg_int(r.parser);
             rin.cmd_pending <= nsl_jtag.ate.ATE_OP_RTI;
             rin.state       <= ST_ATE_RUN;
           elsif r.tag > 0 and r.tag < 8 then
-            nsl_simulation.logging.log_info("Running ATE_OP_SHIFT for n bytes = " & nsl_data.text.to_string(nsl_data.cbor.arg(r.parser, 64)));
+--            nsl_simulation.logging.log_info("Running ATE_OP_SHIFT for n bytes = " & nsl_data.text.to_string(nsl_data.cbor.arg(r.parser, 64)));
             rin.word_count  <= nsl_data.cbor.arg_int(r.parser);
             rin.cmd_pending <= nsl_jtag.ate.ATE_OP_SHIFT;
             rin.state     <= ST_RSP_BSTR_HDR_PREP;
           elsif r.tag = 8 then
-            nsl_simulation.logging.log_info("Running ATE_OP_SHIFT with no TDI for n bytes = " & nsl_data.text.to_string(nsl_data.cbor.arg(r.parser, 64)/8));
+--            nsl_simulation.logging.log_info("Running ATE_OP_SHIFT with no TDI for n bytes = " & nsl_data.text.to_string(nsl_data.cbor.arg(r.parser, 64)/8));
             rin.word_count  <= nsl_data.cbor.arg_int(r.parser)/8;
             rin.cmd_pending <= nsl_jtag.ate.ATE_OP_SHIFT;
             rin.state     <= ST_RSP_BSTR_HDR_PREP;
           elsif r.tag = 10 then
-            nsl_simulation.logging.log_info("Running ATE_OP_RESET");
+--            nsl_simulation.logging.log_info("Running ATE_OP_RESET");
             rin.cmd_bit_count <= 0;
             rin.word_count  <= nsl_data.cbor.arg_int(r.parser);
             rin.cmd_pending <= nsl_jtag.ate.ATE_OP_RESET;
             rin.state       <= ST_ATE_RUN;
           elsif r.tag = 11 then -- run for ms
-            nsl_simulation.logging.log_info("Running ATE_OP_RTI for " & nsl_data.text.to_string(nsl_data.cbor.arg_int(r.parser)) & "ms");
-            nsl_simulation.logging.log_info("tick_i_hz_c : " & nsl_data.text.to_string(tick_i_hz_c) & " Hz");
-            nsl_simulation.logging.log_info("word count set to " & nsl_data.text.to_string(nsl_data.cbor.arg_int(r.parser) * tick_i_hz_c / 1000));
+--            nsl_simulation.logging.log_info("Running ATE_OP_RTI for " & nsl_data.text.to_string(nsl_data.cbor.arg_int(r.parser)) & "ms");
+--            nsl_simulation.logging.log_info("tick_i_hz_c : " & nsl_data.text.to_string(tick_i_hz_c) & " Hz");
+--            nsl_simulation.logging.log_info("word count set to " & nsl_data.text.to_string(nsl_data.cbor.arg_int(r.parser) * tick_i_hz_c / 1000));
             rin.word_count  <= nsl_data.cbor.arg_int(r.parser) * r.tick_per_ms;
             rin.cmd_bit_count <= 0;
             rin.cmd_pending <= nsl_jtag.ate.ATE_OP_RTI;
@@ -275,11 +275,11 @@ begin
           end if;
 
         elsif nsl_data.cbor.kind(r.parser) = nsl_data.cbor.KIND_BSTR then
-          nsl_simulation.logging.log_info("Running ATE_OP_SHIFT with BSTR of length " & nsl_data.text.to_string(nsl_data.cbor.arg(r.parser, 64)));
+--          nsl_simulation.logging.log_info("Running ATE_OP_SHIFT with BSTR of length " & nsl_data.text.to_string(nsl_data.cbor.arg(r.parser, 64)));
           rin.word_count  <= nsl_data.cbor.arg_int(r.parser);
           rin.cmd_pending <= nsl_jtag.ate.ATE_OP_SHIFT;
           if r.has_tdo then
-            nsl_simulation.logging.log_info("No TDO");
+--            nsl_simulation.logging.log_info("No TDO");
             rin.state <= ST_RSP_BSTR_HDR_PREP;
           else
             rin.state <= ST_DATA_GET;
@@ -288,15 +288,15 @@ begin
         elsif nsl_data.cbor.kind(r.parser) = nsl_data.cbor.KIND_SIMPLE then
           rin.cmd_bit_count <= 0;
           if nsl_data.cbor.arg_int(r.parser) = 1 then
-            nsl_simulation.logging.log_info("Running ATE_OP_DR_CAPTURE");
+--            nsl_simulation.logging.log_info("Running ATE_OP_DR_CAPTURE");
             rin.cmd_pending <= nsl_jtag.ate.ATE_OP_DR_CAPTURE;
             rin.state <= ST_ATE_RUN;
           elsif nsl_data.cbor.arg_int(r.parser) = 2 then
-            nsl_simulation.logging.log_info("Running ATE_OP_IR_CAPTURE");
+--            nsl_simulation.logging.log_info("Running ATE_OP_IR_CAPTURE");
             rin.cmd_pending <= nsl_jtag.ate.ATE_OP_IR_CAPTURE;
             rin.state <= ST_ATE_RUN;
           elsif nsl_data.cbor.arg_int(r.parser) = 3 then
-            nsl_simulation.logging.log_info("Running ATE_OP_SWD_TO_JTAG");
+--            nsl_simulation.logging.log_info("Running ATE_OP_SWD_TO_JTAG");
             rin.cmd_pending <= nsl_jtag.ate.ATE_OP_SWD_TO_JTAG;
             rin.state <= ST_ATE_RUN;
           end if;
@@ -309,6 +309,7 @@ begin
           end if;
 
         else
+          -- nsl_simulation.logging.log_warning("Unknown type! > " & nsl_data.text.to_string(nsl_data.cbor.kind_t'pos(nsl_data.cbor.kind(r.parser))));
           nsl_simulation.logging.log_warning("Unknown type! > " & nsl_data.cbor.kind_t'image(nsl_data.cbor.kind(r.parser)));
           rin.state <= ST_RSP_BREAK_PREP;
         end if;
@@ -337,13 +338,14 @@ begin
           if r.word_count /= 0 then
             rin.word_count <= r.word_count - 1;
             rin.state <= ST_ATE_RUN;
-            nsl_simulation.logging.log_info("in ST_ATE_WAIT_FOR_DONE with r.word_count = " & nsl_data.text.to_string(r.word_count) & ", going back to ST_ATE_RUN");
+            -- nsl_simulation.logging.log_info("in ST_ATE_WAIT_FOR_DONE with r.word_count = " & nsl_data.text.to_string(r.word_count) & ", going back to ST_ATE_RUN");
           else
             rin.state <= ST_CMD_END;
           end if;
         end if;
 
       when ST_DATA_GET =>
+        -- nsl_simulation.logging.log_info("in ST_DATA_GET with r.word_count = " & nsl_data.text.to_string(r.word_count) & ".");
         rin.cmd_bit_count <= data_max_size_c - 1;
         if (r.word_count = 1) and (r.bit_count /= 0) then
           rin.cmd_bit_count <= r.bit_count;
