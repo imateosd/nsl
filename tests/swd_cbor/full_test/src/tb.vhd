@@ -223,6 +223,75 @@ begin
       message => "======================================",
       color => nsl_simulation.logging.LOG_COLOR_CYAN
     );
+
+    -- Test 1: JTAG-to-SWD sequence (true = f5)
+    -- Command: [true] = 81 f5
+    -- Response: empty indefinite array (no response for protocol switch)
+    nsl_amba.axi4_stream.frame_queue_check_io(root_master => cmd_q,
+                                              root_slave  => rsp_q,
+                                              data1       => nsl_data.bytestream.from_suv(x"81f5"),
+                                              data2       => nsl_data.bytestream.from_suv(x"9fff"),
+                                              check_status => check_status,
+                                              dt          => clock_period,
+                                              timeout     => clock_period*2000000,
+                                              sev         => warning);
+    nsl_simulation.logging.log_test_result("JTAG-to-SWD sequence", check_status, pass_count, fail_count);
+
+    wait for 100 us;
+
+    -- Test 2: Run command (50 cycles) for line reset
+    -- Command: [50] = 81 18 32
+    -- Response: empty (no response for run)
+    nsl_amba.axi4_stream.frame_queue_check_io(root_master => cmd_q,
+                                              root_slave  => rsp_q,
+                                              data1       => nsl_data.bytestream.from_suv(x"811832"),
+                                              data2       => nsl_data.bytestream.from_suv(x"9fff"),
+                                              check_status => check_status,
+                                              dt          => clock_period,
+                                              timeout     => clock_period*2000000,
+                                              sev         => warning);
+    nsl_simulation.logging.log_test_result("Run 50 cycles", check_status, pass_count, fail_count);
+
+    wait for 100 us;
+
+    -- Test 3: Read DP IDR (reg0, 1 word)
+    -- Command: [#6.0(1)] = 81 c0 01
+    -- Response: [array(3): [indef_bstr[bstr(4 bytes IDR)], offset=0, status=1(OK)]]
+    -- DP IDR = 0x04567e11
+    -- Format: 9f 83 5f 44 <4 bytes> ff 18 00 01 ff
+    nsl_amba.axi4_stream.frame_queue_check_io(root_master => cmd_q,
+                                              root_slave  => rsp_q,
+                                              data1       => nsl_data.bytestream.from_suv(x"81c001"),
+                                              data2       => nsl_data.bytestream.from_suv(x"9f835f4404567e11ff180001ff"),
+                                              check_status => check_status,
+                                              dt          => clock_period,
+                                              timeout     => clock_period*2000000,
+                                              sev         => warning);
+    nsl_simulation.logging.log_test_result("Read DP IDR (reg0)", check_status, pass_count, fail_count);
+
+    wait for 100 us;
+
+    -- Test 4: Full SWD initialization sequence
+    -- Combined: turnaround(1), run(10), write CTRL/STAT, run(8), write SELECT, run(8)
+    -- 86 = array(6)
+    -- c8 01 = turnaround(1)
+    -- 0a = run(10)
+    -- c1 44 00 00 00 50 = DP reg1 write (CTRL/STAT = 0x50000000 - enable debug power)
+    -- 08 = run(8)
+    -- c2 44 f0 00 00 00 = DP reg2 write (SELECT = 0x000000F0 - AP0 bank F)
+    -- 08 = run(8)
+    -- Responses: write response x2 = 82 18 01 01, 82 18 01 01 (offset=1, status=OK)
+    nsl_amba.axi4_stream.frame_queue_check_io(root_master => cmd_q,
+                                              root_slave  => rsp_q,
+                                              data1       => nsl_data.bytestream.from_suv(x"86c8010ac1440000005008c244f000000008"),
+                                              data2       => nsl_data.bytestream.from_suv(x"9f8218010182180101ff"),
+                                              check_status => check_status,
+                                              dt          => clock_period,
+                                              timeout     => clock_period*5000000,
+                                              sev         => warning);
+    nsl_simulation.logging.log_test_result("SWD init (CTRL/STAT + SELECT)", check_status, pass_count, fail_count);
+
+    wait for 100 us;
     nsl_amba.axi4_stream.frame_queue_check_io(root_master => cmd_q,
                                               root_slave  => rsp_q,
                                               data1       => nsl_data.bytestream.from_suv(x"8EC801C94700000000000000F5C947000000000000000AC001C1440000005008C244F000000008C70101C70101"),
