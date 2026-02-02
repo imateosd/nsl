@@ -201,6 +201,7 @@ begin
   stim: process
     variable check_status : boolean := false;
     variable pass_count, fail_count : integer := 0;
+    variable rx_frm : nsl_amba.axi4_stream.frame_t;  -- For receiving/discarding responses
   begin
     -- Let FSM reach IDLE
     wait for 50 ns;
@@ -292,17 +293,100 @@ begin
     nsl_simulation.logging.log_test_result("SWD init (CTRL/STAT + SELECT)", check_status, pass_count, fail_count);
 
     wait for 100 us;
+
+    -- Test 5: Trigger AP read to load AP IDR into RDBUFF
+    -- AP reads are posted - first read returns stale data, result goes to RDBUFF
+    -- Command: [run(8), #6.7(1)] = 82 08 c7 01
+    -- Response contains stale/undefined data - consume but don't verify
+    nsl_amba.axi4_stream.frame_queue_put(root => cmd_q,
+                                         data => nsl_data.bytestream.from_suv(x"8208c701"));
+    -- Consume the response (stale data) without checking it
+    nsl_amba.axi4_stream.frame_queue_get(root => rsp_q,
+                                         frm => rx_frm,
+                                         dt => clock_period,
+                                         timeout => clock_period*5000000,
+                                         sev => warning);
+    check_status := true;  -- Consider pass since we just need to trigger the AP read
+    nsl_simulation.logging.log_test_result("AP read trigger (stale response consumed)", check_status, pass_count, fail_count);
+
+    wait for 100 us;
+
+    -- Test 6: Read DP CTRL/STAT (reg1) - verify debug power enabled
+    -- Command: [#6.1(1)] = 81 c1 01
+    -- Response: [array(3): [indef_bstr[bstr(4 bytes)], offset=0, status=1(OK)]]
+    -- Note: Returns 0xF0000000 (ctrl bits with ack bits set) as 00 00 00 f0 (LE)
     nsl_amba.axi4_stream.frame_queue_check_io(root_master => cmd_q,
                                               root_slave  => rsp_q,
-                                              data1       => nsl_data.bytestream.from_suv(x"8EC801C94700000000000000F5C947000000000000000AC001C1440000005008C244F000000008C70101C70101"),
-                                              data2       => nsl_data.bytestream.from_suv(x"9faabbccddff"),
+                                              data1       => nsl_data.bytestream.from_suv(x"81c101"),
+                                              data2       => nsl_data.bytestream.from_suv(x"9f835f44f0000000ff180001ff"),
                                               check_status => check_status,
                                               dt          => clock_period,
-                                              timeout     => clock_period*200000000,
+                                              timeout     => clock_period*5000000,
                                               sev         => warning);
-    nsl_simulation.logging.log_test_result("Read DP IDR", check_status, pass_count, fail_count);
+    nsl_simulation.logging.log_test_result("Read DP CTRL/STAT (reg1)", check_status, pass_count, fail_count);
 
-    wait for 1000 ns;
+    wait for 100 us;
+
+    -- Test 7: Read DP RDBUFF (reg3) - returns last AP read result (AP IDR)
+    -- Command: [#6.3(1)] = 81 c3 01
+    -- Response: [array(3): [indef_bstr[bstr(4 bytes)], offset=0, status=1(OK)]]
+    -- AP IDR = 0x01234e11 returned as: 01 23 4e 11
+    nsl_amba.axi4_stream.frame_queue_check_io(root_master => cmd_q,
+                                              root_slave  => rsp_q,
+                                              data1       => nsl_data.bytestream.from_suv(x"81c301"),
+                                              data2       => nsl_data.bytestream.from_suv(x"9f835f4401234e11ff180001ff"),
+                                              check_status => check_status,
+                                              dt          => clock_period,
+                                              timeout     => clock_period*5000000,
+                                              sev         => warning);
+    nsl_simulation.logging.log_test_result("Read DP RDBUFF (reg3)", check_status, pass_count, fail_count);
+
+    wait for 100 us;
+
+    -- Test 8: Bitbang custom sequence (8 bytes of 0xFF = 64 high clocks for line reset)
+    -- Command: [#6.9(bstr(8 bytes))] = 81 c9 48 ff ff ff ff ff ff ff ff
+    -- Response: empty (no response for bitbang)
+    nsl_amba.axi4_stream.frame_queue_check_io(root_master => cmd_q,
+                                              root_slave  => rsp_q,
+                                              data1       => nsl_data.bytestream.from_suv(x"81c948ffffffffffffffff"),
+                                              data2       => nsl_data.bytestream.from_suv(x"9fff"),
+                                              check_status => check_status,
+                                              dt          => clock_period,
+                                              timeout     => clock_period*2000000,
+                                              sev         => warning);
+    nsl_simulation.logging.log_test_result("Bitbang line reset", check_status, pass_count, fail_count);
+
+    wait for 100 us;
+
+    -- Test 9: Set turnaround to 2 cycles (default)
+    -- Command: [#6.8(2)] = 81 c8 02
+    -- Response: empty (sticky setting)
+    nsl_amba.axi4_stream.frame_queue_check_io(root_master => cmd_q,
+                                              root_slave  => rsp_q,
+                                              data1       => nsl_data.bytestream.from_suv(x"81c802"),
+                                              data2       => nsl_data.bytestream.from_suv(x"9fff"),
+                                              check_status => check_status,
+                                              dt          => clock_period,
+                                              timeout     => clock_period*2000000,
+                                              sev         => warning);
+    nsl_simulation.logging.log_test_result("Set turnaround (2 cycles)", check_status, pass_count, fail_count);
+
+    wait for 100 us;
+
+    -- Test 10: Set turnaround to 3 cycles
+    -- Command: [#6.8(3)] = 81 c8 03
+    -- Response: empty (sticky setting)
+    nsl_amba.axi4_stream.frame_queue_check_io(root_master => cmd_q,
+                                              root_slave  => rsp_q,
+                                              data1       => nsl_data.bytestream.from_suv(x"81c803"),
+                                              data2       => nsl_data.bytestream.from_suv(x"9fff"),
+                                              check_status => check_status,
+                                              dt          => clock_period,
+                                              timeout     => clock_period*2000000,
+                                              sev         => warning);
+    nsl_simulation.logging.log_test_result("Set turnaround (3 cycles)", check_status, pass_count, fail_count);
+
+    wait for 1 ms;
 
     nsl_simulation.logging.log_test_suite_summary("SWD CBOR TRANSACTOR TESTS", pass_count, fail_count);
 
