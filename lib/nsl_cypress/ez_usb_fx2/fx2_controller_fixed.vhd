@@ -9,10 +9,10 @@ use nsl_cypress.ez_usb_fx2.all;
 entity fx2_controller_fixed is
   generic(
     axi_cfg_c           : nsl_amba.axi4_stream.config_t;
-    rx_ep_c             : nsl_cypress.ez_usb_fx2.fx2_ep_t   := nsl_cypress.ez_usb_fx2.FX2_EP2;
-    rx_empty_flag_c     : nsl_cypress.ez_usb_fx2.fx2_flag_t := nsl_cypress.ez_usb_fx2.FX2_FLAGA;
-    tx_ep_c             : nsl_cypress.ez_usb_fx2.fx2_ep_t   := nsl_cypress.ez_usb_fx2.FX2_EP6;
-    tx_full_flag_c      : nsl_cypress.ez_usb_fx2.fx2_flag_t := nsl_cypress.ez_usb_fx2.FX2_FLAGB;
+    rx_ep_c             : fx2_ep_t   := FX2_EP2;
+    rx_empty_flag_c     : fx2_flag_t := FX2_FLAGA;
+    tx_ep_c             : fx2_ep_t   := FX2_EP6;
+    tx_full_flag_c      : fx2_flag_t := FX2_FLAGB;
     addr_change_delay_c : natural := 0
     );
   port(
@@ -95,7 +95,6 @@ begin
         rin.state <= ST_IDLE;
         rin.data <= (others => '-');
         rin.last <= false;
-        -- rin.addr <= (others => '-');
 
       when ST_IDLE => -- Write has priority
         if tx_full_n_s = '1' and nsl_amba.axi4_stream.is_valid(axi_cfg_c, tx_i) then
@@ -203,8 +202,8 @@ begin
                           -- on the empty flag
         rx_o <= nsl_amba.axi4_stream.transfer(cfg => axi_cfg_c,
                                               bytes => nsl_data.bytestream.from_suv(r.data),
-                                              -- last => false);
-                                              last => rx_empty_n_s = '0');
+                                              last => false);
+
         to_fx2_o.oe_n <= '0';
       
     end case;
