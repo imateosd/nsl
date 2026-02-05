@@ -16,7 +16,7 @@ package control_status is
   constant CONTROL_STATUS_REG_WRITE: std_ulogic_vector(7 downto 0) := "0-------";
   constant CONTROL_STATUS_REG_READ : std_ulogic_vector(7 downto 0) := "1-------";
   
-  component framed_control_status
+  component stream_control_status
     generic (
       cfg_c          : nsl_amba.axi4_stream.config_t;
       config_count_c : integer range 1 to 128;

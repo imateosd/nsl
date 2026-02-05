@@ -7,7 +7,7 @@ use nsl_amba.control_status.all;
 use nsl_amba.axi4_stream.all;
 use nsl_data.bytestream.all;
 
-entity framed_control_status is
+entity stream_control_status is
   generic (
     cfg_c          : config_t;
     config_count_c : integer range 1 to 128;
@@ -28,7 +28,7 @@ entity framed_control_status is
   );
 end entity;
 
-architecture rtl of framed_control_status is
+architecture rtl of stream_control_status is
 
   type state_t is (
     STATE_RESET,
