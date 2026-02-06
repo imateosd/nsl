@@ -30,7 +30,7 @@ end entity;
 architecture rtl of controller is
   
   constant data_max_size_c      : natural := 8;
-  constant cbr_hdr_max_size_c   : natural := 9;
+  constant cbr_hdr_max_size_c   : natural := 3;
   constant buffer_cfg_c         : nsl_amba.axi4_stream.buffer_config_t := nsl_amba.axi4_stream.buffer_config(axi_s_cfg_c, cbr_hdr_max_size_c);
 
   type state_t is (
@@ -56,7 +56,8 @@ architecture rtl of controller is
     ST_RSP_BSTR_HDR_PREP,
     ST_RSP_BSTR_HDR_PUT,
     ST_RSP_BREAK_PREP,
-    ST_RSP_BREAK_PUT
+    ST_RSP_BREAK_PUT,
+    ST_ERROR_DRAIN
   );
   
   type regs_t is
@@ -65,14 +66,13 @@ architecture rtl of controller is
     
     cmd_pending   : nsl_jtag.ate.ate_op;
     cmd_bit_count : natural range 0 to data_max_size_c - 1;
-    cmd_data      : std_ulogic_vector(7 downto 0);
     
     has_tdo       : boolean;
     has_tdi       : boolean;
     data          : std_ulogic_vector(7 downto 0);
     bit_count     : natural range 0 to 7;
-    word_count    : natural range 0 to 1023;
-    tick_per_ms   : integer;
+    word_count    : natural range 0 to 4095;
+    tick_per_ms   : natural range 0 to 2**20-1;  -- supports ticks up to ~2 GHz
     
     parser        : nsl_data.cbor.parser_t;
     indefinite    : boolean;
@@ -116,6 +116,7 @@ architecture rtl of controller is
      when ST_RSP_BSTR_HDR_PUT   => return "ST_RSP_BSTR_HDR_PUT";
      when ST_RSP_BREAK_PREP     => return "ST_RSP_BREAK_PREP";
      when ST_RSP_BREAK_PUT      => return "ST_RSP_BREAK_PUT";
+     when ST_ERROR_DRAIN        => return "ST_ERROR_DRAIN";
      when others                => return "UNKNOWN";
    end case;
   end;
@@ -156,6 +157,7 @@ begin
 
   transition: process(cmd_i, r, rsp_i,
                       s_cmd_ready, s_rsp_data, s_rsp_valid)
+    variable data : std_ulogic_vector(7 downto 0);
   begin
     rin <= r;
 
@@ -182,8 +184,9 @@ begin
       when ST_ARRAY_GET =>
         if nsl_amba.axi4_stream.is_valid(axi_s_cfg_c, cmd_i) then
           nsl_simulation.logging.log_info("In ST_ARRAY_GET, parsing a byte");
-          rin.parser <= nsl_data.cbor.feed(r.parser, cmd_i.data(0));
-          if nsl_data.cbor.is_last( r.parser, cmd_i.data(0) ) then
+          data := nsl_data.bytestream.first_left(nsl_amba.axi4_stream.bytes(axi_s_cfg_c, cmd_i));
+          rin.parser <= nsl_data.cbor.feed(r.parser, data);
+          if nsl_data.cbor.is_last( r.parser, data ) then
             rin.state <= ST_ARRAY_ENTER;
             rin.tick_per_ms <= tick_i_hz / 2000;
           end if;
@@ -192,7 +195,6 @@ begin
       when ST_ARRAY_ENTER =>
         if nsl_data.cbor.kind(r.parser) = nsl_data.cbor.KIND_ARRAY then
           if not r.parser.indefinite then
-            -- nsl_simulation.logging.log_info("r.command_count set to " & nsl_data.text.to_string(nsl_data.cbor.arg_int(r.parser)));
             rin.command_count <= nsl_data.cbor.arg_int(r.parser);
             rin.indefinite    <= false;
           else
@@ -200,16 +202,17 @@ begin
           end if;
           rin.parser <= nsl_data.cbor.reset;
           rin.state  <= ST_RSP_ARRAY_HDR_PREP;
-        else 
-           -- TODO ??
+        else
+          nsl_simulation.logging.log_warning("Expected CBOR array, draining frame");
+          rin.last  <= true;
+          rin.state <= ST_ERROR_DRAIN;
         end if;
 
       when ST_CMD_GET =>
         if nsl_amba.axi4_stream.is_valid(axi_s_cfg_c, cmd_i) then
---            nsl_simulation.logging.log_info("In ST_CMD_GET, parsing a byte");
---            nsl_simulation.logging.log_info("cmd_i.data(0) " & nsl_data.text.to_hex_string(cmd_i.data(0)));
-          rin.parser <= nsl_data.cbor.feed(r.parser, cmd_i.data(0));
-          if nsl_data.cbor.is_last( r.parser, cmd_i.data(0) ) then
+          data := nsl_data.bytestream.first_left(nsl_amba.axi4_stream.bytes(axi_s_cfg_c, cmd_i));
+          rin.parser <= nsl_data.cbor.feed(r.parser, data );
+          if nsl_data.cbor.is_last( r.parser, data ) then
             rin.state <= ST_CMD_EXEC;
             if not r.indefinite and not r.inside_cmd then
               rin.command_count <= r.command_count - 1;
@@ -239,47 +242,46 @@ begin
           elsif nsl_data.cbor.arg_int(r.parser) = 11 then -- RTI for N ms
             rin.inside_cmd <= true;
             rin.state      <= ST_CMD_GET; -- going to get the number of ms
+          else
+            nsl_simulation.logging.log_warning("Unhandled CBOR tag, draining frame");
+            rin.last  <= false;
+            rin.state <= ST_ERROR_DRAIN;
           end if;
         
         elsif nsl_data.cbor.kind(r.parser) = nsl_data.cbor.KIND_POSITIVE then
           if r.tag = 0 then -- not inside a tag!!
---            nsl_simulation.logging.log_info("Running ATE_OP_RTI for " & nsl_data.text.to_string(nsl_data.cbor.arg_int(r.parser)) & " cycles");
             rin.cmd_bit_count <= 0;
             rin.word_count  <= nsl_data.cbor.arg_int(r.parser);
             rin.cmd_pending <= nsl_jtag.ate.ATE_OP_RTI;
             rin.state       <= ST_ATE_RUN;
           elsif r.tag > 0 and r.tag < 8 then
---            nsl_simulation.logging.log_info("Running ATE_OP_SHIFT for n bytes = " & nsl_data.text.to_string(nsl_data.cbor.arg(r.parser, 64)));
             rin.word_count  <= nsl_data.cbor.arg_int(r.parser);
             rin.cmd_pending <= nsl_jtag.ate.ATE_OP_SHIFT;
             rin.state     <= ST_RSP_BSTR_HDR_PREP;
           elsif r.tag = 8 then
---            nsl_simulation.logging.log_info("Running ATE_OP_SHIFT with no TDI for n bytes = " & nsl_data.text.to_string(nsl_data.cbor.arg(r.parser, 64)/8));
             rin.word_count  <= nsl_data.cbor.arg_int(r.parser)/8;
             rin.cmd_pending <= nsl_jtag.ate.ATE_OP_SHIFT;
             rin.state     <= ST_RSP_BSTR_HDR_PREP;
           elsif r.tag = 10 then
---            nsl_simulation.logging.log_info("Running ATE_OP_RESET");
             rin.cmd_bit_count <= 0;
             rin.word_count  <= nsl_data.cbor.arg_int(r.parser);
             rin.cmd_pending <= nsl_jtag.ate.ATE_OP_RESET;
             rin.state       <= ST_ATE_RUN;
           elsif r.tag = 11 then -- run for ms
---            nsl_simulation.logging.log_info("Running ATE_OP_RTI for " & nsl_data.text.to_string(nsl_data.cbor.arg_int(r.parser)) & "ms");
---            nsl_simulation.logging.log_info("tick_i_hz_c : " & nsl_data.text.to_string(tick_i_hz_c) & " Hz");
---            nsl_simulation.logging.log_info("word count set to " & nsl_data.text.to_string(nsl_data.cbor.arg_int(r.parser) * tick_i_hz_c / 1000));
             rin.word_count  <= nsl_data.cbor.arg_int(r.parser) * r.tick_per_ms;
             rin.cmd_bit_count <= 0;
             rin.cmd_pending <= nsl_jtag.ate.ATE_OP_RTI;
             rin.state       <= ST_ATE_RUN;
+          else
+            nsl_simulation.logging.log_warning("Unhandled tag context for positive value, draining frame");
+            rin.last  <= false;
+            rin.state <= ST_ERROR_DRAIN;
           end if;
 
         elsif nsl_data.cbor.kind(r.parser) = nsl_data.cbor.KIND_BSTR then
---          nsl_simulation.logging.log_info("Running ATE_OP_SHIFT with BSTR of length " & nsl_data.text.to_string(nsl_data.cbor.arg(r.parser, 64)));
           rin.word_count  <= nsl_data.cbor.arg_int(r.parser);
           rin.cmd_pending <= nsl_jtag.ate.ATE_OP_SHIFT;
           if r.has_tdo then
---            nsl_simulation.logging.log_info("No TDO");
             rin.state <= ST_RSP_BSTR_HDR_PREP;
           else
             rin.state <= ST_DATA_GET;
@@ -288,30 +290,33 @@ begin
         elsif nsl_data.cbor.kind(r.parser) = nsl_data.cbor.KIND_SIMPLE then
           rin.cmd_bit_count <= 0;
           if nsl_data.cbor.arg_int(r.parser) = 1 then
---            nsl_simulation.logging.log_info("Running ATE_OP_DR_CAPTURE");
             rin.cmd_pending <= nsl_jtag.ate.ATE_OP_DR_CAPTURE;
             rin.state <= ST_ATE_RUN;
           elsif nsl_data.cbor.arg_int(r.parser) = 2 then
---            nsl_simulation.logging.log_info("Running ATE_OP_IR_CAPTURE");
             rin.cmd_pending <= nsl_jtag.ate.ATE_OP_IR_CAPTURE;
             rin.state <= ST_ATE_RUN;
           elsif nsl_data.cbor.arg_int(r.parser) = 3 then
---            nsl_simulation.logging.log_info("Running ATE_OP_SWD_TO_JTAG");
             rin.cmd_pending <= nsl_jtag.ate.ATE_OP_SWD_TO_JTAG;
             rin.state <= ST_ATE_RUN;
+          else
+            nsl_simulation.logging.log_warning("Unhandled CBOR simple value, draining frame");
+            rin.last  <= false;
+            rin.state <= ST_ERROR_DRAIN;
           end if;
 
         elsif nsl_data.cbor.kind(r.parser) = nsl_data.cbor.KIND_BREAK then
           if r.indefinite then
             rin.state  <= ST_RSP_BREAK_PREP;
-          else 
-            nsl_simulation.logging.log_warning("Found break code inside definite lenght array");
+          else
+            nsl_simulation.logging.log_warning("Found break code inside definite length array, draining frame");
+            rin.last  <= false;
+            rin.state <= ST_ERROR_DRAIN;
           end if;
 
         else
-          -- nsl_simulation.logging.log_warning("Unknown type! > " & nsl_data.text.to_string(nsl_data.cbor.kind_t'pos(nsl_data.cbor.kind(r.parser))));
-          nsl_simulation.logging.log_warning("Unknown type! > " & nsl_data.cbor.kind_t'image(nsl_data.cbor.kind(r.parser)));
-          rin.state <= ST_RSP_BREAK_PREP;
+          nsl_simulation.logging.log_warning("Unknown CBOR type: " & nsl_data.cbor.kind_t'image(nsl_data.cbor.kind(r.parser)) & ", draining frame");
+          rin.last  <= false;
+          rin.state <= ST_ERROR_DRAIN;
         end if;
         rin.parser <= nsl_data.cbor.reset;
 
@@ -353,14 +358,14 @@ begin
 
         if r.has_tdi then
           if nsl_amba.axi4_stream.is_valid(axi_s_cfg_c, cmd_i) then
-            rin.cmd_data <= cmd_i.data(0);
+            rin.data <= nsl_data.bytestream.first_left(nsl_amba.axi4_stream.bytes(axi_s_cfg_c, cmd_i));
             if r.word_count /= 0 then
               rin.word_count <= r.word_count - 1;
             end if;
             rin.state <= ST_DATA_RUN;
           end if;
         else
-          rin.cmd_data <= (others => '0');
+          rin.data <= (others => '0');
           if r.word_count /= 0 then
             rin.word_count <= r.word_count - 1;
           end if;
@@ -430,6 +435,18 @@ begin
           if nsl_amba.axi4_stream.is_ready(axi_s_cfg_c, rsp_i) then
             rin.state <= ST_ARRAY_GET;
           end if;
+
+      when ST_ERROR_DRAIN =>
+          if nsl_amba.axi4_stream.is_valid(axi_s_cfg_c, cmd_i) then
+            if nsl_amba.axi4_stream.is_last(axi_s_cfg_c, cmd_i) then
+              if r.last then
+                rin.state <= ST_RESET;
+              else
+                rin.state <= ST_RSP_BREAK_PREP;
+              end if;
+            end if;
+          end if;
+
       when others =>
           null;
 
@@ -438,7 +455,7 @@ begin
 
   moore: process (r)
   begin
-    cmd_o.ready <= '0';
+    cmd_o <= nsl_amba.axi4_stream.accept(axi_s_cfg_c, false);
     rsp_o <= nsl_amba.axi4_stream.transfer_defaults(cfg => axi_s_cfg_c);
 
     s_rsp_ready <= '0';
@@ -449,17 +466,17 @@ begin
     when ST_RESET | ST_ARRAY_ENTER | ST_CMD_EXEC | ST_CMD_END =>
 
     when ST_ARRAY_GET =>
-      cmd_o.ready <= '1';
+      cmd_o <= nsl_amba.axi4_stream.accept(axi_s_cfg_c, true);
 
-    when ST_CMD_GET =>
-      cmd_o.ready <= '1';
+    when ST_CMD_GET | ST_ERROR_DRAIN =>
+      cmd_o <= nsl_amba.axi4_stream.accept(axi_s_cfg_c, true);
 
     when ST_ATE_RUN | ST_DATA_RUN => 
       s_cmd_valid <= '1';
 
     when ST_DATA_GET =>
       if r.has_tdi then
-        cmd_o.ready <= '1';
+        cmd_o <= nsl_amba.axi4_stream.accept(axi_s_cfg_c, true);
       end if;
       
     when ST_DATA_PUT =>
@@ -495,7 +512,7 @@ begin
       cmd_ready_o   => s_cmd_ready,
       cmd_valid_i   => s_cmd_valid,
       cmd_op_i      => r.cmd_pending,
-      cmd_data_i    => r.cmd_data,
+      cmd_data_i    => r.data,
       cmd_size_m1_i => r.cmd_bit_count,
 
       rsp_ready_i => s_rsp_ready,
