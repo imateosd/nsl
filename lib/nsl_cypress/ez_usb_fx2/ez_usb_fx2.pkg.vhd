@@ -59,7 +59,7 @@ package ez_usb_fx2 is
   end record;
 
   -- Controller designed to interface with EZ-USB-FX2 configured in Slave FIFOs
-  -- mode, with synchronous R/W and flags configured in indexed mode.
+  -- mode, with synchronous R/W and flags configured in indexed mode. (Untested)
   --
   -- The FX2 Slave FIFO interface does not preserve USB frame boundaries. As a
   -- result, TLAST is never asserted on the RX AXI-Stream bus (OUT). On the TX
