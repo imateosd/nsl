@@ -2,7 +2,7 @@ library ieee;
 use ieee.std_logic_1164.all;
 use ieee.numeric_std.all;
 
-library nsl_bnoc, nsl_amba;
+library nsl_bnoc, nsl_amba, nsl_data;
 
 entity axi4_stream_to_bnoc is
   generic(
@@ -18,11 +18,12 @@ entity axi4_stream_to_bnoc is
 end entity;
 
 architecture beh of axi4_stream_to_bnoc is
-
+    signal received_bytes : nsl_data.bytestream.byte_string(nsl_amba.axi4_stream.byte_count(axi4s_cfg_c, axi4s_req_i)-1 downto 0);
 begin
-    
+  received_bytes <= nsl_amba.axi4_stream.bytes(axi4s_cfg_c, axi4s_req_i); 
+  
   bnoc_req_o <= nsl_bnoc.framed.framed_flit(
-    data => nsl_amba.axi4_stream.bytes(axi4s_cfg_c, axi4s_req_i)(0),
+    data => received_bytes(0),
     last => nsl_amba.axi4_stream.is_last(axi4s_cfg_c, axi4s_req_i),
     valid => nsl_amba.axi4_stream.is_valid(axi4s_cfg_c, axi4s_req_i));
   axi4s_ack_o <= nsl_amba.axi4_stream.accept(axi4s_cfg_c, bnoc_ack_i.ready = '1');
