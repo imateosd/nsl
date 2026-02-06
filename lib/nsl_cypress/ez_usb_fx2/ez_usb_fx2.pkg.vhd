@@ -62,8 +62,8 @@ package ez_usb_fx2 is
   -- mode, with synchronous R/W and flags configured in indexed mode.
   --
   -- The FX2 Slave FIFO interface does not preserve USB frame boundaries. As a
-  -- result, TLAST is never asserted on the RX AXI-Stream bus (IN). On the TX
-  -- AXI-Stream bus (OUT), asserting TLAST forces the controller to commit the
+  -- result, TLAST is never asserted on the RX AXI-Stream bus (OUT). On the TX
+  -- AXI-Stream bus (IN), asserting TLAST forces the controller to commit the
   -- current buffer by pulsing PKTEND, sending a short packet on the USB bus.
   component fx2_controller is
     generic(
@@ -95,8 +95,8 @@ package ez_usb_fx2 is
   -- It's not optimized for speed.
   --
   -- The FX2 Slave FIFO interface does not preserve USB frame boundaries. As a
-  -- result, TLAST is never asserted on the RX AXI-Stream bus (IN). On the TX
-  -- AXI-Stream bus (OUT), asserting TLAST forces the controller to commit the
+  -- result, TLAST is never asserted on the RX AXI-Stream bus (OUT). On the TX
+  -- AXI-Stream bus (IN), asserting TLAST forces the controller to commit the
   -- current buffer by pulsing PKTEND, sending a short packet on the USB bus.
   component fx2_controller_fixed is
     generic(
@@ -129,8 +129,8 @@ package ez_usb_fx2 is
   -- Fastest version of fx2_controller_fixed.
   --
   -- The FX2 Slave FIFO interface does not preserve USB frame boundaries. As a
-  -- result, TLAST is never asserted on the RX AXI-Stream bus (IN). On the TX
-  -- AXI-Stream bus (OUT), asserting TLAST forces the controller to commit the
+  -- result, TLAST is never asserted on the RX AXI-Stream bus (OUT). On the TX
+  -- AXI-Stream bus (IN), asserting TLAST forces the controller to commit the
   -- current buffer by pulsing PKTEND, sending a short packet on the USB bus.
   component fx2_controller_fixed_fast is
     generic(
