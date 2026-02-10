@@ -323,13 +323,11 @@ begin
 
     wait for 10*clock_period;
 
-    -- Test 10: Shift minus-2 (#6.2 = c2) on loopback - shift 6 bits
-    -- 83 = array(3), 82 01 00 = [1, 0], c2 41 ff = tag2(bstr(0xff)), f6 = null
-    -- 0xff = 11111111, shift 6 bits = 111111 = 0x3f
+    -- Test 10: Shift minus-2 (#6.2 = c2) on loopback - shift 6 bits of last byte
     nsl_amba.axi4_stream.frame_queue_check_io(root_master => cmd_q,
                                               root_slave  => rsp_q,
-                                              data1 => nsl_data.bytestream.from_suv(x"83820100c241fff6"),
-                                              data2 => nsl_data.bytestream.from_suv(x"9f5900013fff"),
+                                              data1 => nsl_data.bytestream.from_suv(x"83820100c242fffff6"),
+                                              data2 => nsl_data.bytestream.from_suv(x"9f590002ff3fff"),
                                               check_status => check_status,
                                               dt      => clock_period,
                                               timeout => clock_period*2000000,
@@ -342,7 +340,7 @@ begin
     -- 0xf0 = 11110000, shift 5 bits = 11110 = 0x1e
     nsl_amba.axi4_stream.frame_queue_check_io(root_master => cmd_q,
                                               root_slave  => rsp_q,
-                                              data1 => nsl_data.bytestream.from_suv(x"83820100c341f0f6"),
+                                              data1 => nsl_data.bytestream.from_suv(x"9f820100c341f0f6ff"),
                                               data2 => nsl_data.bytestream.from_suv(x"9f5900011eff"),
                                               check_status => check_status,
                                               dt      => clock_period,
@@ -393,6 +391,18 @@ begin
     nsl_simulation.logging.log_test_result("Shift minus-7 on loopback (1 bit)", check_status, pass_count, fail_count);
 
     wait for 10*clock_period;
+
+    -- Test 15: Pause command (#6.10 = ca) between operations with very small wait
+    -- 85 = array(5): select, shift, pause(6 ticks), shift, unselect
+    nsl_amba.axi4_stream.frame_queue_check_io(root_master => cmd_q,
+                                              root_slave  => rsp_q,
+                                              data1 => nsl_data.bytestream.from_suv(x"858201004112ca064134f6"),
+                                              data2 => nsl_data.bytestream.from_suv(x"9f5900011259000134ff"),
+                                              check_status => check_status,
+                                              dt      => clock_period,
+                                              timeout => clock_period*2000000,
+                                              sev     => warning);
+    nsl_simulation.logging.log_test_result("Pause between shifts on loopback", check_status, pass_count, fail_count);
 
     -- Test 15: Pause command (#6.10 = ca) between operations
     -- 85 = array(5): select, shift, pause(50 ticks), shift, unselect
@@ -447,6 +457,94 @@ begin
                                               timeout => clock_period*2000000,
                                               sev     => warning);
     nsl_simulation.logging.log_test_result("Multi-CS: write to RAM then loopback", check_status, pass_count, fail_count);
+
+    wait for 10*clock_period;
+
+    -- Test 19: Pause command with long delay (#6.10 = ca with 2-byte uint)
+    -- 84 = array(4): select CS1, shift, pause(1000 ticks = 0x03e8), shift, unselect
+    nsl_amba.axi4_stream.frame_queue_check_io(root_master => cmd_q,
+                                              root_slave  => rsp_q,
+                                              data1 => nsl_data.bytestream.from_suv(x"858201004156ca1903e84178f6"),
+                                              data2 => nsl_data.bytestream.from_suv(x"9f5900015659000178ff"),
+                                              check_status => check_status,
+                                              dt      => clock_period,
+                                              timeout => clock_period*5000000,
+                                              sev     => warning);
+    nsl_simulation.logging.log_test_result("Long pause (1000 ticks) between shifts", check_status, pass_count, fail_count);
+
+    wait for 10*clock_period;
+
+    -- Test 20: Write with no MISO followed by write with MISO
+    -- 84 = array(4): select CS1, no-miso shift, regular shift, unselect
+    -- c9 41 aa = #6.9(bstr(0xaa)) - no MISO capture
+    -- 41 bb = bstr(0xbb) - with MISO capture (loopback returns 0xbb)
+    nsl_amba.axi4_stream.frame_queue_check_io(root_master => cmd_q,
+                                              root_slave  => rsp_q,
+                                              data1 => nsl_data.bytestream.from_suv(x"84820100c941aa41bbf6"),
+                                              data2 => nsl_data.bytestream.from_suv(x"9f590001bbff"),
+                                              check_status => check_status,
+                                              dt      => clock_period,
+                                              timeout => clock_period*2000000,
+                                              sev     => warning);
+    nsl_simulation.logging.log_test_result("No-MISO shift then MISO shift", check_status, pass_count, fail_count);
+
+    wait for 10*clock_period;
+
+    -- Test 21: Mode change while CS is selected (mode 0 -> mode 1)
+    -- 85 = array(5): select CS1 mode0, shift, select CS1 mode1, shift, unselect
+    -- Note: Re-selecting same CS with different mode changes SPI timing mid-transaction
+    nsl_amba.axi4_stream.frame_queue_check_io(root_master => cmd_q,
+                                              root_slave  => rsp_q,
+                                              data1 => nsl_data.bytestream.from_suv(x"858201004199820101419af6"),
+                                              data2 => nsl_data.bytestream.from_suv(x"9f590001995900019aff"),
+                                              check_status => check_status,
+                                              dt      => clock_period,
+                                              timeout => clock_period*2000000,
+                                              sev     => warning);
+    nsl_simulation.logging.log_test_result("Mode change while CS selected (mode0->mode1)", check_status, pass_count, fail_count);
+
+    wait for 10*clock_period;
+
+    -- Test 22: Tag=8 shift_cycles with non-multiple-of-8 (#6.8(12) = shift 12 bits, no MOSI)
+    -- Tag=8 shifts N bits without MOSI data - MOSI stays at 0, loopback returns 0s
+    -- Response: 2 bytes (ceiling(12/8)), last byte masked to 4 bits (bits 3-0)
+    nsl_amba.axi4_stream.frame_queue_check_io(root_master => cmd_q,
+                                              root_slave  => rsp_q,
+                                              data1 => nsl_data.bytestream.from_suv(x"83820100c80cf6"),
+                                              data2 => nsl_data.bytestream.from_suv(x"9f5900020000ff"),
+                                              check_status => check_status,
+                                              dt      => clock_period,
+                                              timeout => clock_period*2000000,
+                                              sev     => warning);
+    nsl_simulation.logging.log_test_result("Tag=8 shift_cycles 12 bits (non-multiple of 8)", check_status, pass_count, fail_count);
+
+    wait for 10*clock_period;
+
+    -- Test 23: Tag=8 shift_cycles with small count < 8 (#6.8(5) = shift 5 bits)
+    -- Tag=8 shifts 5 bits without MOSI, loopback returns 0s masked to 5 bits
+    nsl_amba.axi4_stream.frame_queue_check_io(root_master => cmd_q,
+                                              root_slave  => rsp_q,
+                                              data1 => nsl_data.bytestream.from_suv(x"83820100c805f6"),
+                                              data2 => nsl_data.bytestream.from_suv(x"9f59000100ff"),
+                                              check_status => check_status,
+                                              dt      => clock_period,
+                                              timeout => clock_period*2000000,
+                                              sev     => warning);
+    nsl_simulation.logging.log_test_result("Tag=8 shift_cycles 5 bits (< 8)", check_status, pass_count, fail_count);
+
+    wait for 10*clock_period;
+
+    -- Test 24: Tag=8 shift_cycles with exactly 8 bits (boundary case)
+    -- Exactly 8 bits = 1 full byte, no masking needed
+    nsl_amba.axi4_stream.frame_queue_check_io(root_master => cmd_q,
+                                              root_slave  => rsp_q,
+                                              data1 => nsl_data.bytestream.from_suv(x"83820100c808f6"),
+                                              data2 => nsl_data.bytestream.from_suv(x"9f59000100ff"),
+                                              check_status => check_status,
+                                              dt      => clock_period,
+                                              timeout => clock_period*2000000,
+                                              sev     => warning);
+    nsl_simulation.logging.log_test_result("Tag=8 shift_cycles 8 bits (exact byte)", check_status, pass_count, fail_count);
 
     wait for 10*clock_period;
 

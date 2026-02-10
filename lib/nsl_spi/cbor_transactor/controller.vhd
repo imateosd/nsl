@@ -10,7 +10,7 @@ entity controller is
     clock_i_hz_c  : natural;
     axi_s_cfg_c   : nsl_amba.axi4_stream.config_t;
     slave_count_c : natural range 1 to 7 := 1;
-    width_c       : natural := 7-- TODO what should the range be here?
+    width_c       : natural := 7
     );
   port(
     clock_i   : in std_ulogic;
@@ -33,7 +33,7 @@ end entity;
 
 architecture rtl of controller is
 
-  constant cbr_hdr_max_size_c : natural := 9;
+  constant cbr_hdr_max_size_c : natural := 3;
   constant buffer_cfg_c       : nsl_amba.axi4_stream.buffer_config_t := nsl_amba.axi4_stream.buffer_config(axi_s_cfg_c, cbr_hdr_max_size_c);
 
   type state_t is (
@@ -61,7 +61,9 @@ architecture rtl of controller is
     ST_RSP_BSTR_HDR_PREP,
     ST_RSP_BSTR_HDR_PUT,
     ST_RSP_BREAK_PREP,
-    ST_RSP_BREAK_PUT
+    ST_RSP_BREAK_PUT,
+    
+    ST_ERROR_DRAIN
     );
   
   
@@ -118,6 +120,8 @@ architecture rtl of controller is
         when ST_RSP_BSTR_HDR_PUT   => return "ST_RSP_BSTR_HDR_PUT";
         when ST_RSP_BREAK_PREP     => return "ST_RSP_BREAK_PREP";
         when ST_RSP_BREAK_PUT      => return "ST_RSP_BREAK_PUT";
+        when ST_ERROR_DRAIN        => return "ST_ERROR_DRAIN";
+        when others                => return "UNKNOWN";
     end case;
   end;
   
@@ -186,7 +190,7 @@ begin
         rin.last          <= false;
 
       when ST_ARRAY_GET =>
-        if cmd_i.valid = '1' then
+        if nsl_amba.axi4_stream.is_valid(axi_s_cfg_c, cmd_i) then
           nsl_simulation.logging.log_info("In parsing, ST_ARRAY_GET a byte");
           rin.parser <= nsl_data.cbor.feed(r.parser, cmd_i.data(0));
           if nsl_data.cbor.is_last( r.parser, cmd_i.data(0) ) then
@@ -206,16 +210,18 @@ begin
           rin.parser <= nsl_data.cbor.reset;
           rin.state  <= ST_RSP_ARRAY_HDR_PREP;
         else 
-           -- TODO ??
+          nsl_simulation.logging.log_warning("Expected CBOR array, draining frame");
+          rin.last  <= true;
+          rin.state <= ST_ERROR_DRAIN;
         end if;
 
       when ST_CMD_GET =>
-          if cmd_i.valid = '1' then
+          if nsl_amba.axi4_stream.is_valid(axi_s_cfg_c, cmd_i) then
             rin.parser <= nsl_data.cbor.feed(r.parser, cmd_i.data(0));
             if nsl_data.cbor.is_last( r.parser, cmd_i.data(0) ) then
               rin.state <= ST_CMD_EXEC;
               if not r.indefinite and not r.inside_cmd then
-                rin.command_count <= (r.command_count - 1) mod 32;
+                rin.command_count <= r.command_count - 1;
               end if;
             end if;
           end if;
@@ -239,7 +245,9 @@ begin
             rin.has_mosi <= false;
             rin.has_miso <= false;
           else
-            null;
+            nsl_simulation.logging.log_warning("Unhandled CBOR tag, draining frame");
+            rin.last  <= false;
+            rin.state <= ST_ERROR_DRAIN;            
           end if;
           -- nsl_simulation.logging.log(level => nsl_simulation.logging.LOG_LEVEL_INFO, color => nsl_simulation.logging.LOG_COLOR_BLUE, message => "Found KIND_TAG with tag =" & nsl_data.text.to_string(tag));
 
@@ -248,13 +256,21 @@ begin
           if r.tag = 8 then -- SHIFT_IN (no MOSI)
             rin.shreg <= (others => '0');
             rin.mosi <= '0';
-            rin.word_count <= nsl_data.cbor.arg_int(r.parser)/8 - 1;
-            rin.state      <= ST_RSP_BSTR_HDR_PREP;
-            if nsl_data.cbor.arg_int(r.parser)/8 = 0 and r.minus /= 0 then
-              rin.bit_count <= r.minus - 1;
-            else 
+            -- rin.word_count <= nsl_data.cbor.arg_int(r.parser)/8 - 1;
+            -- rin.state      <= ST_RSP_BSTR_HDR_PREP;
+            -- if nsl_data.cbor.arg_int(r.parser)/8 = 0 and r.minus /= 0 then
+            --   rin.bit_count <= r.minus - 1;
+            -- else 
+            --   rin.bit_count <= width_c;
+            -- end if;
+            rin.word_count  <= (nsl_data.cbor.arg_int(r.parser)+7)/8 - 1;
+            if nsl_data.cbor.arg_int(r.parser) mod 8 = 0 then
               rin.bit_count <= width_c;
+            else
+              rin.bit_count <= nsl_data.cbor.arg_int(r.parser) mod 8 - 1;
+              rin.minus <= nsl_data.cbor.arg_int(r.parser) mod 8 - 1;
             end if;
+            rin.state      <= ST_RSP_BSTR_HDR_PREP;
           elsif r.tag = 10 then -- 'pause'
             rin.shreg <= (others => '0');
             rin.mosi <= '0';
@@ -264,21 +280,22 @@ begin
             else
               rin.bit_count <=  nsl_data.cbor.arg_int(r.parser) mod 8;
               rin.word_count <= nsl_data.cbor.arg_int(r.parser)/8 - 1;
-              rin.state      <= ST_SHIFT_FIRST_HALF;
             end if;
+            rin.state <= ST_SHIFT_FIRST_HALF;
+          else
+            nsl_simulation.logging.log_warning("Unhandled tag context for positive value, draining frame");
+            rin.last  <= false;
+            rin.state <= ST_ERROR_DRAIN;
           end if;
 
         elsif nsl_data.cbor.kind(r.parser) = nsl_data.cbor.KIND_NULL then
-          -- nsl_simulation.logging.log(level => nsl_simulation.logging.LOG_LEVEL_INFO, color => nsl_simulation.logging.LOG_COLOR_BLUE, message => "Found KIND_NULL");
           rin.selected <= slave_count_c;
           rin.state <= ST_CMD_END;
 
         elsif nsl_data.cbor.kind(r.parser) = nsl_data.cbor.KIND_ARRAY then
-          -- nsl_simulation.logging.log(level => nsl_simulation.logging.LOG_LEVEL_INFO, color => nsl_simulation.logging.LOG_COLOR_BLUE, message => "Found KIND_ARRAY");
           rin.state <= ST_CMD_GET_CS;
           
         elsif nsl_data.cbor.kind(r.parser) = nsl_data.cbor.KIND_BSTR then
-          -- nsl_simulation.logging.log(level => nsl_simulation.logging.LOG_LEVEL_INFO, color => nsl_simulation.logging.LOG_COLOR_BLUE, message => "Found KIND_BSTR");
           rin.word_count <= nsl_data.cbor.arg_int(r.parser) - 1;
           if r.has_miso then                                                          
             rin.state <= ST_RSP_BSTR_HDR_PREP;                                        
@@ -287,6 +304,20 @@ begin
           end if;                       
           
           rin.has_mosi   <= true;
+
+        elsif nsl_data.cbor.kind(r.parser) = nsl_data.cbor.KIND_BREAK then
+          if r.indefinite then
+            rin.state  <= ST_RSP_BREAK_PREP;
+          else
+            nsl_simulation.logging.log_warning("Found break code inside definite length array, draining frame");
+            rin.last  <= false;
+            rin.state <= ST_ERROR_DRAIN;
+          end if;
+
+        else
+          nsl_simulation.logging.log_warning("Unknown CBOR type: " & nsl_data.cbor.kind_t'image(nsl_data.cbor.kind(r.parser)) & ", draining frame");
+          rin.last  <= false;
+          rin.state <= ST_ERROR_DRAIN;
         end if;
 
       when ST_CMD_END =>
@@ -304,7 +335,7 @@ begin
 
       when ST_CMD_GET_CS =>
         if not nsl_data.cbor.is_done(r.parser) then
-          if cmd_i.valid = '1' then
+          if nsl_amba.axi4_stream.is_valid(axi_s_cfg_c, cmd_i) then
             rin.parser <= nsl_data.cbor.feed(r.parser, cmd_i.data(0));
           end if;
         else
@@ -315,7 +346,7 @@ begin
         
       when ST_CMD_GET_MODE =>
         if not nsl_data.cbor.is_done(r.parser) then
-          if cmd_i.valid = '1' then
+          if nsl_amba.axi4_stream.is_valid(axi_s_cfg_c, cmd_i) then
             rin.parser <= nsl_data.cbor.feed(r.parser, cmd_i.data(0));
           end if;
         else
@@ -328,7 +359,7 @@ begin
         end if;   
 
       when ST_DATA_GET =>
-        if cmd_i.valid = '1' then
+        if nsl_amba.axi4_stream.is_valid(axi_s_cfg_c, cmd_i) then
           rin.mosi <= cmd_i.data(0)(width_c);
           rin.shreg <= cmd_i.data(0);
           rin.state <= ST_SHIFT_FIRST_HALF;
@@ -354,7 +385,7 @@ begin
       when ST_SHIFT_FIRST_HALF =>
         if tick_i = '1' then
           rin.state <= ST_SHIFT_SECOND_HALF;
-          rin.shreg <= r.shreg(6 downto 0) & miso_i;
+          rin.shreg <= r.shreg(width_c-1 downto 0) & miso_i;
         end if;
 
       when ST_SHIFT_SECOND_HALF =>
@@ -395,7 +426,7 @@ begin
          end if;
 
       when ST_DATA_PUT =>
-        if rsp_i.ready = '1' then
+        if nsl_amba.axi4_stream.is_ready(axi_s_cfg_c, rsp_i) then
           if r.word_count /= 0 then
             rin.word_count <= r.word_count - 1;
             rin.bit_count <= width_c;
@@ -419,7 +450,7 @@ begin
         rin.last  <= false;
           
       when ST_RSP_ARRAY_HDR_PUT =>
-        if rsp_i.ready = '1' then
+        if nsl_amba.axi4_stream.is_ready(axi_s_cfg_c, rsp_i) then
           if nsl_amba.axi4_stream.is_last(buffer_cfg_c, r.encoded) then
               rin.state <= ST_CMD_GET;
           end if;
@@ -432,7 +463,7 @@ begin
         rin.last  <= false;
 
       when ST_RSP_BSTR_HDR_PUT =>
-        if rsp_i.ready = '1' then
+        if nsl_amba.axi4_stream.is_ready(axi_s_cfg_c, rsp_i) then
           if nsl_amba.axi4_stream.is_last(buffer_cfg_c, r.encoded) then
             if r.has_mosi then
               rin.state <= ST_DATA_GET;
@@ -449,10 +480,21 @@ begin
         rin.state <= ST_RSP_BREAK_PUT;
     
       when ST_RSP_BREAK_PUT =>
-        if rsp_i.ready = '1' then
+        if nsl_amba.axi4_stream.is_ready(axi_s_cfg_c, rsp_i) then
           rin.state <= ST_ARRAY_GET;
         end if;
       
+      when ST_ERROR_DRAIN =>
+          if nsl_amba.axi4_stream.is_valid(axi_s_cfg_c, cmd_i) then
+            if nsl_amba.axi4_stream.is_last(axi_s_cfg_c, cmd_i) then
+              if r.last then
+                rin.state <= ST_RESET;
+              else
+                rin.state <= ST_RSP_BREAK_PREP;
+              end if;
+            end if;
+          end if;
+
       when others =>
           null;
     end case;
@@ -461,7 +503,8 @@ begin
   moore: process(r)
     variable rsp_data : std_ulogic_vector(7 downto 0);
   begin
-    cmd_o.ready <= '0';
+    cmd_o <= nsl_amba.axi4_stream.accept(axi_s_cfg_c, false);
+    rsp_o <= nsl_amba.axi4_stream.transfer_defaults(axi_s_cfg_c);
     rsp_o.valid <= '0';
     rsp_o.last <= '-';
     rsp_o.data(0) <= (others => '-');
@@ -495,12 +538,12 @@ begin
           sck_o <= r.cpol xnor r.cpha;
         end if;
 
-      when ST_ARRAY_GET | ST_CMD_GET | ST_DATA_GET =>
-        cmd_o.ready <= '1';
+      when ST_ARRAY_GET | ST_CMD_GET | ST_DATA_GET  | ST_ERROR_DRAIN =>
+        cmd_o <= nsl_amba.axi4_stream.accept(axi_s_cfg_c, true);
 
       when ST_CMD_GET_MODE | ST_CMD_GET_CS =>
         if not nsl_data.cbor.is_done(r.parser) then
-          cmd_o.ready <= '1';
+          cmd_o <= nsl_amba.axi4_stream.accept(axi_s_cfg_c, true);
         end if;
 
       when ST_DATA_PUT =>
@@ -508,8 +551,14 @@ begin
           if r.minus = 0 then
             rsp_o <= nsl_amba.axi4_stream.transfer( cfg => axi_s_cfg_c, bytes => nsl_data.bytestream.from_suv(r.shreg), last => false);
           else
-            rsp_data := (others => '0');
-            rsp_data(r.minus-1 downto 0) := r.shreg(r.minus-1 downto 0);
+            -- report "in ST_DATA_PUT Word count is " & integer'image(r.word_count) & "; minus is " & integer'image(r.minus);
+            if r.word_count = 0 and r.minus /= 0 then
+              rsp_data := (others => '0');
+              rsp_data(r.minus-1 downto 0) := r.shreg(r.minus-1 downto 0);
+              -- report "r.shreg is " & nsl_data.text.to_string(r.shreg) & " r.shreg(r.minus-1 downto 0) "& nsl_data.text.to_string(r.shreg(r.minus-1 downto 0));
+            else
+              rsp_data := r.shreg;
+            end if;
             rsp_o <= nsl_amba.axi4_stream.transfer( cfg => axi_s_cfg_c, bytes => nsl_data.bytestream.from_suv(rsp_data), last => false);
           end if;
         end if;
