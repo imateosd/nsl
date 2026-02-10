@@ -22,7 +22,6 @@ entity uart_tx_no_generics is
     ready_o     : out std_ulogic;
     valid_i     : in std_ulogic;
     
-    -- bit_count   : in unsigned(3 downto 0); -- range 7 to 8
     stop_count  : in unsigned(1 downto 0); -- range 1 to 2
     parity      : in unsigned(1 downto 0); -- encoded value of parity_t
     rtr_active  : in std_ulogic := '0'
@@ -74,7 +73,7 @@ begin
     end if;
   end process;
 
-  transition: process(r, data_i, valid_i, divisor_i, rtr_i, stop_count, parity)
+  transition: process(r, data_i, valid_i, divisor_i, rtr_i, rtr_active, stop_count, parity)
   begin
     rin <= r;
 
@@ -101,16 +100,14 @@ begin
             rin.shreg(max_shreg_width_c-(bit_count_c+4)-1 downto 0) <= (others => '-');
             rin.bit_ctr <= 2 + bit_count_c;
           end if;
-        elsif rtr_i /= rtr_active then
-          report "Going to ST_WAIT";
-          report "rtr_i /= rtr_active";
-          report "rtr_i = " & std_ulogic'image(rtr_i);
-          report "rtr_active = " & std_ulogic'image(rtr_active);
+        elsif rtr_active = '1' and rtr_i = '0' then
+          -- Handshake enabled and receiver not ready - wait for CTS
           rin.state <= ST_WAIT;
         end if;
 
       when ST_WAIT =>
-        if rtr_i = rtr_active then
+        if rtr_active = '0' or rtr_i = '1' then
+          -- Handshake disabled or receiver is ready
           rin.state <= ST_IDLE;
         end if;
 
@@ -150,7 +147,12 @@ begin
           rin.bit_ctr <= r.bit_ctr - 1;
           rin.shreg <= "-" & r.shreg(r.shreg'left downto 1);
         else
-          rin.state <= ST_WAIT;
+          -- Transmission complete, go back to idle (or wait for CTS if handshake enabled)
+          if rtr_active = '1' and rtr_i = '0' then
+            rin.state <= ST_WAIT;
+          else
+            rin.state <= ST_IDLE;
+          end if;
           rin.shreg <= (others => '-');
         end if;
 

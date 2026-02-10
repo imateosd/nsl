@@ -105,15 +105,15 @@ package serdes is
       -- default, but could be reversed through generics.
       rts_o       : out std_ulogic;
 
-      data_o      : out std_ulogic_vector(bit_count_c-1 downto 0);
-      valid_o     : out std_ulogic;
-      ready_i     : in std_ulogic := '1';
+      data_o         : out std_ulogic_vector(bit_count_c-1 downto 0);
+      valid_o        : out std_ulogic;
+      ready_i        : in std_ulogic := '1';
       parity_error_o : out std_ulogic;
-      break_o     : out std_ulogic;
+      break_o        : out std_ulogic;
 
-      stop_count  : in unsigned(1 downto 0); -- range 1 to 2
-      parity      : in unsigned(1 downto 0); -- encoded value of parity_t
-      rts_active  : in std_ulogic := '0'
+      stop_count_i   : in unsigned(1 downto 0); -- range 1 to 2
+      parity_i       : in unsigned(1 downto 0); -- encoded value of parity_t
+      rts_active_i   : in std_ulogic := '0'
       );
   end component;
 

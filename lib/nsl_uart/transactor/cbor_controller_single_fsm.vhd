@@ -36,7 +36,13 @@ architecture rtl of cbor_controller_single_fsm is
 
   constant OP_SUCCESS : std_ulogic_vector(7 downto 0) := X"F5";
   constant OP_FAILURE : std_ulogic_vector(7 downto 0) := X"F4";
-  
+
+  function max(a, b : natural) return natural is
+  begin
+    if a > b then return a; else return b; end if;
+  end function;
+
+  constant item_count_max_c : natural := max(bstr_max_size_c, 7);
   constant cbr_max_size_c : natural := 30; -- max payload is the response with
                                            -- the configuration map
   constant buffer_cfg_c   : nsl_amba.axi4_stream.buffer_config_t := nsl_amba.axi4_stream.buffer_config(axi_s_cfg_c, 30);
@@ -46,26 +52,25 @@ architecture rtl of cbor_controller_single_fsm is
   constant BAUD_RATE_STR_C : string := "baud-rate";
   constant NONE_STR_C      : string := "none";
   constant CTS_STR_C       : string := "cts";
-  constant XON_STR_C       : string := "xon";
   constant N_STR_C         : string := "n";
   constant E_STR_C         : string := "e";
   constant O_STR_C         : string := "o";
   
-  constant DIV_300     : unsigned := to_unsigned(system_clock_c / 300,     32);
-  constant DIV_1200    : unsigned := to_unsigned(system_clock_c / 1200,    32);
-  constant DIV_2400    : unsigned := to_unsigned(system_clock_c / 2400,    32);
-  constant DIV_4800    : unsigned := to_unsigned(system_clock_c / 4800,    32);
-  constant DIV_9600    : unsigned := to_unsigned(system_clock_c / 9600,    32);
-  constant DIV_19200   : unsigned := to_unsigned(system_clock_c / 19200,   32);
-  constant DIV_38400   : unsigned := to_unsigned(system_clock_c / 38400,   32);
-  constant DIV_57600   : unsigned := to_unsigned(system_clock_c / 57600,   32);
-  constant DIV_115200  : unsigned := to_unsigned(system_clock_c / 115200,  32);
-  constant DIV_230400  : unsigned := to_unsigned(system_clock_c / 230400,  32);
-  constant DIV_460800  : unsigned := to_unsigned(system_clock_c / 460800,  32);
-  constant DIV_921600  : unsigned := to_unsigned(system_clock_c / 921600,  32);
-  constant DIV_1000000 : unsigned := to_unsigned(system_clock_c / 1000000, 32);
-  constant DIV_2000000 : unsigned := to_unsigned(system_clock_c / 2000000, 32);
-  constant DIV_3000000 : unsigned := to_unsigned(system_clock_c / 3000000, 32);
+  constant DIV_300     : unsigned := to_unsigned(system_clock_c / 300,     20);
+  constant DIV_1200    : unsigned := to_unsigned(system_clock_c / 1200,    20);
+  constant DIV_2400    : unsigned := to_unsigned(system_clock_c / 2400,    20);
+  constant DIV_4800    : unsigned := to_unsigned(system_clock_c / 4800,    20);
+  constant DIV_9600    : unsigned := to_unsigned(system_clock_c / 9600,    20);
+  constant DIV_19200   : unsigned := to_unsigned(system_clock_c / 19200,   20);
+  constant DIV_38400   : unsigned := to_unsigned(system_clock_c / 38400,   20);
+  constant DIV_57600   : unsigned := to_unsigned(system_clock_c / 57600,   20);
+  constant DIV_115200  : unsigned := to_unsigned(system_clock_c / 115200,  20);
+  constant DIV_230400  : unsigned := to_unsigned(system_clock_c / 230400,  20);
+  constant DIV_460800  : unsigned := to_unsigned(system_clock_c / 460800,  20);
+  constant DIV_921600  : unsigned := to_unsigned(system_clock_c / 921600,  20);
+  constant DIV_1000000 : unsigned := to_unsigned(system_clock_c / 1000000, 20);
+  constant DIV_2000000 : unsigned := to_unsigned(system_clock_c / 2000000, 20);
+  constant DIV_3000000 : unsigned := to_unsigned(system_clock_c / 3000000, 20);
 
   -- Lookup table function to convert baud rate to divisor without runtime division
   -- Supports common baud rates; unknown rates default to 115200
@@ -91,9 +96,9 @@ architecture rtl of cbor_controller_single_fsm is
     end case;
   end function;
 
-  -- Lookup table function to convert baud rate to divisor without runtime division
-  -- Supports common baud rates; unknown rates default to 115200
-  function divisor_to_baud(divisor : unsigned(31 downto 0)) return unsigned is
+  -- Lookup table function to convert divisor to baud rate
+  -- Supports common baud rates; unknown divisors default to 115200
+  function divisor_to_baud(divisor : unsigned(19 downto 0)) return unsigned is
   begin
     if    divisor = DIV_300     then return to_unsigned(300,     32);
     elsif divisor = DIV_1200    then return to_unsigned(1200,    32);
@@ -120,12 +125,12 @@ architecture rtl of cbor_controller_single_fsm is
     ST_IDLE,
     ST_CONFIG_ITEM_GET,
     ST_CONFIG_STR_GET,
+    ST_CONFIG_STR_DRAIN,
     ST_MESSAGE_ROUTE,
     ST_RSP_BSTR_HDR_PREP,
     ST_RSP_BSTR_HDR_PUT,
     ST_RSP_DATA_PUT,
-    ST_RSP_OK_PUT,
-    ST_RSP_FAIL_PUT,
+    ST_RSP_PUT,
     ST_RSP_CONFIG_PREP,
     ST_RSP_CONFIG_PUT,
     ST_ERROR_DRAIN
@@ -134,9 +139,12 @@ architecture rtl of cbor_controller_single_fsm is
   type map_parsing_state_t is (
     MAP_NONE,
     MAP_KEY,
-    MAP_VAL_FC,
-    MAP_VAL_PAR,
-    MAP_VAL_BR
+    MAP_KEY_FC,   -- Parsing "flow-ctrl" key
+    MAP_KEY_PAR,  -- Parsing "parity" key
+    MAP_KEY_BR,   -- Parsing "baud-rate" key
+    MAP_VAL_FC,   -- Parsing flow-ctrl value
+    MAP_VAL_PAR,  -- Parsing parity value
+    MAP_VAL_BR    -- Parsing baud-rate value
     );
   
   type regs_t is
@@ -145,28 +153,28 @@ architecture rtl of cbor_controller_single_fsm is
     
     map_state   : map_parsing_state_t;
     parser      : nsl_data.cbor.parser_t;
-    item_count  : natural range 0 to 511;  -- Used for both config items and bstr byte count
-    len         : natural range 0 to 1023;
-    str         : nsl_data.bytestream.byte_string(0 to 8);
-    
+    item_count  : natural range 0 to item_count_max_c;
+    len         : natural range 0 to 15;   -- String length countdown
+
     parity      : nsl_uart.serdes.parity_t;
     hs          : std_ulogic;
     stop_count  : natural range 1 to 2;
-    divisor     : unsigned(31 downto 0);
+    divisor     : unsigned(19 downto 0);
 
     count       : natural range 0 to bstr_max_size_c;
-    timeout     : unsigned(63 downto 0);
+    flush_count : natural range 0 to bstr_max_size_c;
+    bit_timer   : unsigned(19 downto 0);  -- Counts down one bit time (divisor clocks)
+    timeout     : unsigned(15 downto 0);  -- Counts bit times until flush
     fifo        : nsl_data.bytestream.byte_string(0 to bstr_max_size_c - 1);
     
     encoded     : nsl_amba.axi4_stream.buffer_t;
     last        : boolean;
+    rsp_success : boolean;
   end record;
 
   signal r, rin: regs_t;
-  
-  signal bnoc_tx_s, bnoc_rx_s: nsl_bnoc.pipe.pipe_bus_t;
 
-  signal req_s, req_ok_s, req_fail_s, done_s : std_ulogic := '0';
+  signal bnoc_tx_s, bnoc_rx_s: nsl_bnoc.pipe.pipe_bus_t;
 
   signal parity_s, stop_count_s : unsigned(1 downto 0);
 begin
@@ -210,23 +218,33 @@ begin
         rin.hs         <= handshake_active_c;
         rin.stop_count <= stop_count_c;
         rin.map_state  <= MAP_NONE;
-        rin.str        <= (others => nsl_data.bytestream.dontcare_byte_c );
-        rin.divisor    <= divisor_c;
+        rin.divisor    <= resize(divisor_c, 20);
         rin.last       <= false;
         rin.len        <= 0;
         rin.count      <= 0;
-        rin.timeout    <= timeout_c*divisor_c;
+        rin.bit_timer  <= resize(divisor_c, 20);
+        rin.timeout    <= resize(timeout_c, 16);
  
       when ST_IDLE =>
-        -- Decrement timeout when there's data waiting in the FIFO
-        if r.count > 0 and r.timeout > 0 then
-          rin.timeout <= r.timeout - 1;
+        -- Prescaler-based timeout: bit_timer counts clocks, timeout counts bit times
+        if r.count > 0 then
+          if r.bit_timer > 0 then
+            rin.bit_timer <= r.bit_timer - 1;
+          else
+            -- One bit time elapsed, reload and decrement timeout
+            rin.bit_timer <= r.divisor;
+            if r.timeout > 0 then
+              rin.timeout <= r.timeout - 1;
+            end if;
+          end if;
         end if;
 
         if (r.count > 0 and r.timeout = 0) or not nsl_data.fifo.fifo_can_push(storage => r.fifo, fillness => r.count) then
           -- Send loopback data when timeout expires or FIFO is full
-          rin.state <= ST_RSP_BSTR_HDR_PREP;
-          rin.timeout <= timeout_c*divisor_c;
+          rin.flush_count <= r.count;
+          rin.state       <= ST_RSP_BSTR_HDR_PREP;
+          rin.bit_timer   <= r.divisor;
+          rin.timeout     <= resize(timeout_c, 16);
         else
           if not nsl_data.cbor.is_done(r.parser) then
             if cmd_i.valid = '1' then
@@ -265,7 +283,8 @@ begin
               rin.divisor <= baud_to_divisor(nsl_data.cbor.arg(r.parser, 32));
               if r.item_count = 0 then
                 rin.map_state <= MAP_NONE;
-                rin.state <= ST_RSP_OK_PUT;  -- Send success response
+                rin.state <= ST_RSP_PUT;
+                rin.rsp_success <= true;
               else
                 rin.state <= ST_CONFIG_ITEM_GET;
               end if;
@@ -275,61 +294,98 @@ begin
         end if;
 
       when ST_CONFIG_STR_GET =>
-        if r.len /= 0 then
-          if cmd_i.valid = '1' then
-            rin.len <= r.len - 1;
-            -- rin.str <= r.str & nsl_data.bytestream.to_character(to_integer(cmd_i.data(0)));
-            rin.str <= nsl_data.bytestream.shift_left(r.str, cmd_i.data(0));
-          end if;
-        else
-          nsl_simulation.logging.log_info("Parsed string is " & nsl_data.bytestream.to_character_string(r.str));
+        if cmd_i.valid = '1' then
           if r.map_state = MAP_KEY then
-            if nsl_data.bytestream.to_character_string(r.str) = FLOW_CTRL_STR_C then
-              rin.map_state <= MAP_VAL_FC;
-            elsif nsl_data.bytestream.to_character_string(r.str(3 to 8)) = PARITY_STR_C then
-              rin.map_state <= MAP_VAL_PAR;
-            elsif nsl_data.bytestream.to_character_string(r.str) = BAUD_RATE_STR_C then
-              rin.map_state <= MAP_VAL_BR;
+            if r.len = 9 and cmd_i.data(0) = x"66" then     -- 'f' = flow-ctrl
+              rin.map_state <= MAP_KEY_FC;
+            elsif r.len = 6 and cmd_i.data(0) = x"70" then  -- 'p' = parity
+              rin.map_state <= MAP_KEY_PAR;
+            elsif r.len = 9 and cmd_i.data(0) = x"62" then  -- 'b' = baud-rate
+              rin.map_state <= MAP_KEY_BR;
             end if;
 
-            rin.item_count <= r.item_count - 1;
+          elsif r.map_state = MAP_VAL_FC then
+            if r.len = 4 and cmd_i.data(0) = x"6E" then     -- 'n' = none
+              rin.hs <= '0';
+            elsif r.len = 3 and cmd_i.data(0) = x"63" then  -- 'c' = cts
+              rin.hs <= '1';
+            elsif r.len = 3 and cmd_i.data(0) = x"78" then  -- 'x' = xon
+              rin.hs <= '0';
+            end if;
 
+          elsif r.map_state = MAP_VAL_PAR then
+            if cmd_i.data(0) = x"6E" then      -- 'n' = none
+              rin.parity <= nsl_uart.serdes.PARITY_NONE;
+            elsif cmd_i.data(0) = x"65" then   -- 'e' = even
+              rin.parity <= nsl_uart.serdes.PARITY_EVEN;
+            elsif cmd_i.data(0) = x"6F" then   -- 'o' = odd
+              rin.parity <= nsl_uart.serdes.PARITY_ODD;
+            end if;
+
+          end if;
+
+          rin.len <= r.len - 1;
+          if r.len = 1 then
+            -- Single char string, handle completion
+            case r.map_state is
+              when MAP_KEY | MAP_KEY_FC | MAP_KEY_PAR | MAP_KEY_BR =>
+                -- Key parsed (shouldn't happen for single char, but handle it)
+                rin.item_count <= r.item_count - 1;
+                case r.map_state is
+                  when MAP_KEY_FC => rin.map_state <= MAP_VAL_FC;
+                  when MAP_KEY_PAR => rin.map_state <= MAP_VAL_PAR;
+                  when MAP_KEY_BR => rin.map_state <= MAP_VAL_BR;
+                  when others => null;
+                end case;
+                rin.state <= ST_CONFIG_ITEM_GET;
+              when MAP_VAL_FC | MAP_VAL_PAR | MAP_VAL_BR =>
+                -- Value parsed, back to key state
+                rin.map_state <= MAP_KEY;
+                if r.item_count = 0 then
+                  rin.map_state <= MAP_NONE;
+                  rin.state <= ST_RSP_PUT;
+                  rin.rsp_success <= true;
+                else
+                  rin.state <= ST_CONFIG_ITEM_GET;
+                end if;
+              when others => null;
+            end case;
           else
-
-            if r.map_state = MAP_VAL_FC then
-              if nsl_data.bytestream.to_character_string(r.str(5 to 8)) = NONE_STR_C then
-                rin.hs <= '0';
-              elsif nsl_data.bytestream.to_character_string(r.str(6 to 8)) = CTS_STR_C then
-                rin.hs <= '1';
-              elsif nsl_data.bytestream.to_character_string(r.str(6 to 8)) = XON_STR_C then
-                rin.hs <= '0';
-              end if;
-              
-            elsif r.map_state = MAP_VAL_PAR then
-              if nsl_data.bytestream.to_character_string(r.str(8 to 8)) = N_STR_C then
-                rin.parity <= nsl_uart.serdes.PARITY_NONE;
-              elsif nsl_data.bytestream.to_character_string(r.str(8 to 8)) = E_STR_C then
-                rin.parity <= nsl_uart.serdes.PARITY_EVEN;
-              elsif nsl_data.bytestream.to_character_string(r.str(8 to 8)) = O_STR_C then
-                rin.parity <= nsl_uart.serdes.PARITY_ODD ;
-              end if;
-              
-            end if;
-
+            -- More chars to drain
+            rin.state <= ST_CONFIG_STR_DRAIN;
           end if;
+        end if;
 
-          rin.str <= (others => nsl_data.bytestream.dontcare_byte_c );
-          
-          rin.state <= ST_CONFIG_ITEM_GET;
-          
-          if r.map_state /= MAP_KEY then
-            rin.map_state <= MAP_KEY;
-            if r.item_count = 0 then
-              rin.map_state <= MAP_NONE;
-              rin.state <= ST_RSP_OK_PUT;
-            end if;
+      when ST_CONFIG_STR_DRAIN =>
+        -- Drain remaining characters of the string
+        if cmd_i.valid = '1' then
+          rin.len <= r.len - 1;
+          if r.len = 1 then
+            -- Done draining, handle completion
+            case r.map_state is
+              when MAP_KEY_FC | MAP_KEY_PAR | MAP_KEY_BR =>
+                -- Key parsed, transition to value state and decrement item_count
+                rin.item_count <= r.item_count - 1;
+                case r.map_state is
+                  when MAP_KEY_FC => rin.map_state <= MAP_VAL_FC;
+                  when MAP_KEY_PAR => rin.map_state <= MAP_VAL_PAR;
+                  when MAP_KEY_BR => rin.map_state <= MAP_VAL_BR;
+                  when others => null;
+                end case;
+                rin.state <= ST_CONFIG_ITEM_GET;
+              when MAP_VAL_FC | MAP_VAL_PAR | MAP_VAL_BR =>
+                -- Value parsed, back to key state
+                rin.map_state <= MAP_KEY;
+                if r.item_count = 0 then
+                  rin.map_state <= MAP_NONE;
+                  rin.state <= ST_RSP_PUT;
+                  rin.rsp_success <= true;
+                else
+                  rin.state <= ST_CONFIG_ITEM_GET;
+                end if;
+              when others => null;
+            end case;
           end if;
-          
         end if;
 
       when ST_RSP_CONFIG_PREP =>
@@ -373,12 +429,13 @@ begin
           rin.item_count <= r.item_count - 1;
           if r.item_count = 1 then
             -- Message TX complete, send F5 confirmation immediately
-            rin.state <= ST_RSP_OK_PUT;
+            rin.state <= ST_RSP_PUT;
+            rin.rsp_success <= true;
           end if;
         end if;
              
       when ST_RSP_BSTR_HDR_PREP =>
-        rin.encoded <= nsl_amba.axi4_stream.reset(buffer_cfg_c, nsl_data.cbor.cbor_bstr_hdr(length => to_unsigned(r.count, 12)) );  
+        rin.encoded <= nsl_amba.axi4_stream.reset(buffer_cfg_c, nsl_data.cbor.cbor_bstr_hdr(length => to_unsigned(r.flush_count, 12)) );  
         rin.state <= ST_RSP_BSTR_HDR_PUT;
 
       when ST_RSP_BSTR_HDR_PUT =>
@@ -390,13 +447,14 @@ begin
         end if;
                   
       when ST_RSP_DATA_PUT =>
-        if nsl_data.fifo.fifo_can_pop(storage => r.fifo, fillness => r.count) then
+        if r.flush_count > 0 and nsl_amba.axi4_stream.is_ready(axi_s_cfg_c, rsp_i) then
+          rin.flush_count <= r.flush_count - 1;
           rin.fifo <= nsl_data.fifo.fifo_shift_data(
             storage => r.fifo,
             fillness => r.count,
             valid => bnoc_rx_s.req.valid = '1', -- continue pushing if there's valid data
             data => bnoc_rx_s.req.data,
-            ready => nsl_amba.axi4_stream.is_ready(axi_s_cfg_c, rsp_i)
+            ready => true
             );
           rin.count <=  nsl_data.fifo.fifo_shift_fillness(
             storage => r.fifo,
@@ -404,7 +462,7 @@ begin
             min_fill => 0,
             valid => bnoc_rx_s.req.valid = '1', -- continue pushing if there's valid data
             data => bnoc_rx_s.req.data,
-            ready => nsl_amba.axi4_stream.is_ready(axi_s_cfg_c, rsp_i)
+            ready => true
             );
         else
           rin.state <= ST_IDLE;
@@ -418,19 +476,15 @@ begin
           rin.encoded <= nsl_amba.axi4_stream.shift(buffer_cfg_c, r.encoded);
         end if;
         
-      when ST_RSP_OK_PUT =>
+      when ST_RSP_PUT =>
         if nsl_amba.axi4_stream.is_ready(axi_s_cfg_c, rsp_i) then
           rin.state <= ST_IDLE;
         end if;
 
-      when ST_RSP_FAIL_PUT =>
-        if nsl_amba.axi4_stream.is_ready(axi_s_cfg_c, rsp_i) then
-          rin.state <= ST_IDLE;
-        end if;
-        
       when ST_ERROR_DRAIN =>
         if nsl_amba.axi4_stream.is_valid(axi_s_cfg_c, cmd_i) and nsl_amba.axi4_stream.is_last(axi_s_cfg_c, cmd_i) then
-          rin.state <= ST_RSP_FAIL_PUT;
+          rin.state <= ST_RSP_PUT;
+          rin.rsp_success <= false;
           rin.parser <= nsl_data.cbor.reset;
         end if;
         
@@ -438,20 +492,14 @@ begin
     
   end process;
 
-  output: process(r, bnoc_tx_s, cmd_i, done_s) -- TODO remove from
-                                                  -- sensitivity list
-                                                  -- everything but r
+  output: process(r, bnoc_tx_s, cmd_i)
   begin
     cmd_o <= nsl_amba.axi4_stream.accept(axi_s_cfg_c, false);
     rsp_o <= nsl_amba.axi4_stream.transfer_defaults( cfg => axi_s_cfg_c);
-    
+
     bnoc_tx_s.req.valid <= '0';
     bnoc_tx_s.req.data <= (others => '-');
-    bnoc_rx_s.ack.ready <= '1';    
-    
-    req_s <= '0';
-    req_ok_s <= '0';
-    req_fail_s <= '0';
+    bnoc_rx_s.ack.ready <= '1';
     
     case r.state is
       when ST_RESET =>
@@ -463,6 +511,9 @@ begin
         cmd_o <= nsl_amba.axi4_stream.accept(axi_s_cfg_c, not nsl_data.cbor.is_done(r.parser));
         
       when ST_CONFIG_STR_GET =>
+        cmd_o <= nsl_amba.axi4_stream.accept(axi_s_cfg_c, true);
+
+      when ST_CONFIG_STR_DRAIN =>
         cmd_o <= nsl_amba.axi4_stream.accept(axi_s_cfg_c, r.len /= 0);
 
       when ST_MESSAGE_ROUTE =>
@@ -473,24 +524,21 @@ begin
       when ST_RSP_BSTR_HDR_PREP | ST_RSP_CONFIG_PREP =>
         
       when ST_RSP_BSTR_HDR_PUT =>
-        -- if nsl_amba.axi4_stream.is_ready(axi_s_cfg_c, rsp_i) then
         rsp_o <= nsl_amba.axi4_stream.next_beat(cfg => buffer_cfg_c, b => r.encoded, last => false);
-        -- end if;
 
       when ST_RSP_CONFIG_PUT =>
         rsp_o <= nsl_amba.axi4_stream.next_beat(cfg => buffer_cfg_c, b => r.encoded, last => nsl_amba.axi4_stream.is_last(cfg => buffer_cfg_c, b => r.encoded) and r.last);
 
       when ST_RSP_DATA_PUT =>
-        -- if nsl_data.fifo.fifo_can_pop(storage => r.fifo, fillness => r.count) then
         bnoc_rx_s.ack.ready <= '1';
-        rsp_o <= nsl_amba.axi4_stream.transfer( cfg => axi_s_cfg_c, bytes => nsl_data.bytestream.from_suv(r.fifo(0)), last => r.count = 1);
-        -- end if;
+        rsp_o <= nsl_amba.axi4_stream.transfer( cfg => axi_s_cfg_c, bytes => nsl_data.bytestream.from_suv(r.fifo(0)), last => r.flush_count = 1);
 
-      when ST_RSP_OK_PUT =>
-        rsp_o <= nsl_amba.axi4_stream.transfer( cfg => axi_s_cfg_c, bytes => nsl_data.bytestream.from_suv(OP_SUCCESS), last => true);
-
-      when ST_RSP_FAIL_PUT =>
-        rsp_o <= nsl_amba.axi4_stream.transfer( cfg => axi_s_cfg_c, bytes => nsl_data.bytestream.from_suv(OP_FAILURE), last => true);
+      when ST_RSP_PUT =>
+        if r.rsp_success then
+          rsp_o <= nsl_amba.axi4_stream.transfer( cfg => axi_s_cfg_c, bytes => nsl_data.bytestream.from_suv(OP_SUCCESS), last => true);
+        else
+          rsp_o <= nsl_amba.axi4_stream.transfer( cfg => axi_s_cfg_c, bytes => nsl_data.bytestream.from_suv(OP_FAILURE), last => true);
+        end if;
 
       when ST_ERROR_DRAIN =>
         cmd_o <= nsl_amba.axi4_stream.accept(axi_s_cfg_c, true);

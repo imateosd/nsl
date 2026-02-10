@@ -37,8 +37,9 @@ architecture rtl of cbor_controller is
   constant OP_SUCCESS : std_ulogic_vector(7 downto 0) := X"F5";
   constant OP_FAILURE : std_ulogic_vector(7 downto 0) := X"F4";
   
-  constant cbr_hdr_max_size_c : natural := 9;
-  constant buffer_cfg_c       : nsl_amba.axi4_stream.buffer_config_t := nsl_amba.axi4_stream.buffer_config(axi_s_cfg_c, 5*cbr_hdr_max_size_c);
+  constant cbr_max_size_c : natural := 30; -- max payload is the response with
+                                           -- the configuration map
+  constant buffer_cfg_c   : nsl_amba.axi4_stream.buffer_config_t := nsl_amba.axi4_stream.buffer_config(axi_s_cfg_c, 30);
 
   constant FLOW_CTRL_STR_C : string := "flow-ctrl";
   constant PARITY_STR_C    : string := "parity";
@@ -123,7 +124,8 @@ architecture rtl of cbor_controller is
     ST_TX_CONFIG_PUT,
     ST_TX_STATE_PUT,
     ST_TX_MESSAGE_ROUTE,
-    ST_TX_MESSAGE_DONE
+    ST_TX_MESSAGE_DONE,
+    ST_ERROR_DRAIN
     );
 
   type rsp_state_t is (
@@ -171,7 +173,7 @@ architecture rtl of cbor_controller is
   record
     state       : rsp_state_t;
     count       : natural range 0 to bstr_max_size_c;
-    timeout     : unsigned(0 to 63);
+    timeout     : unsigned(63 downto 0);
     fifo        : nsl_data.bytestream.byte_string(0 to bstr_max_size_c - 1);
     encoded     : nsl_amba.axi4_stream.buffer_t;
     last        : boolean;
@@ -198,7 +200,7 @@ begin
     end if;
   end process;
 
-  transition_tx: process(clock_i, cmd_i, r)
+  transition_tx: process(cmd_i, r, done_s, bnoc_tx_s)
       variable cbr_encoded : nsl_data.bytestream.byte_stream;
       variable cbr_len : natural;
   begin
@@ -233,6 +235,9 @@ begin
           elsif nsl_data.cbor.kind(r.parser) = nsl_data.cbor.KIND_NULL then
             rin.count <= 0;
             rin.state <= ST_TX_CONFIG_PREP;
+          else
+            -- Unknown CBOR type - drain input and send failure response
+            rin.state <= ST_ERROR_DRAIN;
           end if;
           rin.parser <= nsl_data.cbor.reset;
         end if;
@@ -264,11 +269,9 @@ begin
         if r.len /= 0 then
           if cmd_i.valid = '1' then
             rin.len <= r.len - 1;
-            -- rin.str <= r.str & nsl_data.bytestream.to_character(to_integer(cmd_i.data(0)));
             rin.str <= nsl_data.bytestream.shift_left(r.str, cmd_i.data(0));
           end if;
         else
-          nsl_simulation.logging.log_info("Parsed string is " & nsl_data.bytestream.to_character_string(r.str));
           if r.map_state = MAP_KEY then
             if nsl_data.bytestream.to_character_string(r.str) = FLOW_CTRL_STR_C then
               rin.map_state <= MAP_VAL_FC;
@@ -313,7 +316,6 @@ begin
             if r.count = 0 then
               rin.map_state <= MAP_NONE;
               rin.state <= ST_TX_STATE_PUT;
-              -- rin.state <= ST_TX_CMD_GET;
             end if;
           end if;
           
@@ -349,7 +351,6 @@ begin
             rin.last <= true;
           when others =>
             rin.count <= 0;
-            -- rin.state <= ST_TX_STATE_PUT;
             rin.state <= ST_TX_CMD_GET;
         end case;        
         if r.count < 7 then
@@ -378,14 +379,22 @@ begin
         if done_s = '1' then
           rin.state <= ST_TX_CMD_GET;
         end if;
+
+      when ST_ERROR_DRAIN =>
+        -- Consume input data until TLAST
+        if cmd_i.valid = '1' then
+          if cmd_i.last = '1' then
+            rin.state <= ST_TX_CMD_GET;
+            rin.parser <= nsl_data.cbor.reset;
+          end if;
+        end if;
     end case;
     
   end process;
 
   output_tx: process(r, bnoc_tx_s, cmd_i, done_s)
   begin
-    -- cmd_o <= nsl_amba.axi4_stream.accept(axi_s_cfg_c, false);
-    cmd_o.ready <= '0';
+    cmd_o <= nsl_amba.axi4_stream.accept(axi_s_cfg_c, false);
     bnoc_tx_s.req.valid <= '0';
     bnoc_tx_s.req.data <= (others => '-');
     req_s <= '0';
@@ -425,27 +434,29 @@ begin
         cmd_o.ready <= bnoc_tx_s.ack.ready;
         bnoc_tx_s.req.valid <= cmd_i.valid;
         bnoc_tx_s.req.data <= cmd_i.data(0);
-        -- if r.count = 1 then
-        --   req_ok_s <= '1';
-        -- end if;
 
       when ST_TX_MESSAGE_DONE =>
         req_ok_s <= '1';
 
       when ST_TX_STATE_PUT =>
         null;
-        
+
+      when ST_ERROR_DRAIN =>
+        cmd_o.ready <= '1';  -- Accept input to drain it
+        req_fail_s <= '1';   -- Signal failure to RX FSM
+
     end case;
   end process;
 
-  transition_rx: process(clock_i, bnoc_tx_s, rr)
+  transition_rx: process(rr, bnoc_rx_s, req_s, req_ok_s, req_fail_s, r, rsp_i)
   begin
     rrin <= rr;
     
     case rr.state is
       when ST_RX_RESET =>
         rrin.state <= ST_RX_IDLE;
-        rrin.timeout <= 50*divisor_c;
+        rrin.timeout <= to_unsigned(50, 32) * divisor_c;
+        rrin.count <= 0;
         
       when ST_RX_IDLE =>
         rrin.timeout <= timeout_c*divisor_c;
@@ -478,7 +489,6 @@ begin
         end if;
         
       when ST_RX_DATA_GET =>
-        -- nsl_simulation.logging.log_info("ST_RX_DATA_GET");
         rrin.timeout <= rr.timeout - 1;
         if rrin.timeout /= 0 and nsl_data.fifo.fifo_can_push(storage => rr.fifo, fillness => rr.count) then
           rrin.fifo <= nsl_data.fifo.fifo_shift_data(
@@ -553,7 +563,7 @@ begin
     end case;
   end process;
 
-  output_rx: process(rr)
+  output_rx: process(rr, rsp_i)
   begin
     bnoc_rx_s.ack.ready <= '0';
     rsp_o <= nsl_amba.axi4_stream.transfer_defaults( cfg => axi_s_cfg_c);
@@ -607,9 +617,9 @@ begin
       clock_i => clock_i,
 
       divisor_i  => r.divisor,
-            
+
       tx_o   => tx_o,
-      -- cts_i  => cts_i,
+      cts_i  => cts_i,
       rx_i   => rx_i,
       rts_o  => rts_o,
 
@@ -626,7 +636,8 @@ begin
       break_o     => open,
 
       stop_count => stop_count_s,
-      parity => parity_s
+      parity => parity_s,
+      handshake_active => r.hs
     );
 
 end architecture;

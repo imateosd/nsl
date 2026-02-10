@@ -8,28 +8,25 @@ use nsl_uart.serdes.all;
 entity uart_rx_no_generics is
   generic(
     bit_count_c : natural
-    -- stop_count_c : natural range 1 to 2;
-    -- parity_c : parity_t;
-    -- rts_active_c : std_ulogic := '0'
     );
   port(
-    clock_i     : in std_ulogic;
-    reset_n_i   : in std_ulogic;
+    clock_i        : in std_ulogic;
+    reset_n_i      : in std_ulogic;
 
-    divisor_i   : in unsigned;
+    divisor_i      : in unsigned;
     
-    uart_i      : in std_ulogic;
-    rts_o       : out std_ulogic;
+    uart_i         : in std_ulogic;
+    rts_o          : out std_ulogic;
 
-    data_o      : out std_ulogic_vector(bit_count_c-1 downto 0);
-    valid_o     : out std_ulogic;
-    ready_i     : in std_ulogic := '1';
+    data_o         : out std_ulogic_vector(bit_count_c-1 downto 0);
+    valid_o        : out std_ulogic;
+    ready_i        : in std_ulogic := '1';
     parity_error_o : out std_ulogic;
-    break_o     : out std_ulogic;
+    break_o        : out std_ulogic;
     
-    stop_count  : in unsigned(1 downto 0); -- range 1 to 2
-    parity      : in unsigned(1 downto 0); -- encoded value of parity_t
-    rts_active  : in std_ulogic := '0'
+    stop_count_i   : in unsigned(1 downto 0); -- range 1 to 2
+    parity_i       : in unsigned(1 downto 0); -- encoded value of parity_t
+    rts_active_i   : in std_ulogic := '0'
     );
 end entity;
 
@@ -107,7 +104,7 @@ begin
           rin.bit_ctr <= bit_count_c-1;
           rin.shreg <= (others => '-');
           rin.all_zero <= true;
-          case parity_t'val(to_integer(parity)) is
+          case parity_t'val(to_integer(parity_i)) is
             when PARITY_ODD =>
               rin.parity <= '0';
 
@@ -126,7 +123,7 @@ begin
           
           if r.bit_ctr /= 0 then
             rin.bit_ctr <= r.bit_ctr - 1;
-          elsif parity_t'val(to_integer(parity)) /= PARITY_NONE then
+          elsif parity_t'val(to_integer(parity_i)) /= PARITY_NONE then
             rin.state <= ST_PARITY;
             rin.data <= uart_i & r.shreg(r.shreg'left downto 1);
           else
@@ -168,7 +165,7 @@ begin
   valid_o <= r.valid;
   data_o <= r.data;
   break_o <= '1' when r.state = ST_BREAK_WAIT else '0';
-  parity_error_o <= '0' when parity_t'val(to_integer(parity)) = PARITY_NONE else not r.parity_ok;
-  rts_o <= rts_active when (r.ready = '1' or r.valid = '0') else not rts_active;
+  parity_error_o <= '0' when parity_t'val(to_integer(parity_i)) = PARITY_NONE else not r.parity_ok;
+  rts_o <= rts_active_i when (r.ready = '1' or r.valid = '0') else not rts_active_i;
 
 end architecture;
