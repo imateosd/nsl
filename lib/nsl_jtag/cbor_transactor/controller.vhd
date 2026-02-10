@@ -11,8 +11,8 @@ entity controller is
     axi_s_cfg_c  : nsl_amba.axi4_stream.config_t
     );
   port (
-    reset_n_i    : in  std_ulogic;
     clock_i      : in  std_ulogic;
+    reset_n_i    : in  std_ulogic;
 
     tick_i_hz    : in natural;
     tick_i       : in std_ulogic;
@@ -70,7 +70,7 @@ architecture rtl of controller is
     has_tdo       : boolean;
     has_tdi       : boolean;
     data          : std_ulogic_vector(7 downto 0);
-    bit_count     : natural range 0 to 7;
+    bit_count     : natural range 0 to 8;
     word_count    : natural range 0 to 4095;
     tick_per_ms   : natural range 0 to 2**20-1;  -- supports ticks up to ~2 GHz
     
@@ -127,6 +127,14 @@ architecture rtl of controller is
     end if;
   end procedure;
 
+  -- Returns a mask with bits (size_m1 downto 0) set to '1'
+  function bit_mask(size_m1 : natural range 0 to 7) return std_ulogic_vector is
+    variable mask : std_ulogic_vector(7 downto 0) := (others => '0');
+  begin
+    mask(size_m1 downto 0) := (others => '1');
+    return mask;
+  end function;
+
 begin
   
   assert nsl_amba.axi4_stream.byte_count(axi_s_cfg_c, cmd_i) = 1
@@ -169,7 +177,7 @@ begin
           rin.has_tdo       <= true;
           rin.has_tdi       <= true;
           rin.data          <= (others => '-');
-          rin.bit_count     <= 0;
+          rin.bit_count     <= 8;
           rin.word_count    <= 0;
           rin.parser        <= nsl_data.cbor.reset;
           rin.indefinite    <= false;
@@ -216,6 +224,7 @@ begin
             rin.state <= ST_CMD_EXEC;
             if not r.indefinite and not r.inside_cmd then
               rin.command_count <= r.command_count - 1;
+              rin.bit_count <= 8;
             end if;
           end if;
         end if;
@@ -255,16 +264,21 @@ begin
             rin.cmd_pending <= nsl_jtag.ate.ATE_OP_RTI;
             rin.state       <= ST_ATE_RUN;
           elsif r.tag > 0 and r.tag < 8 then
-            rin.word_count  <= nsl_data.cbor.arg_int(r.parser);
+            rin.word_count  <= nsl_data.cbor.arg_int(r.parser)-1;
             rin.cmd_pending <= nsl_jtag.ate.ATE_OP_SHIFT;
             rin.state     <= ST_RSP_BSTR_HDR_PREP;
           elsif r.tag = 8 then
-            rin.word_count  <= nsl_data.cbor.arg_int(r.parser)/8;
+            rin.word_count  <= (nsl_data.cbor.arg_int(r.parser)+7)/8; -- -1?
+            if nsl_data.cbor.arg_int(r.parser) mod 8 = 0 then
+              rin.bit_count <= 8;
+            else
+              rin.bit_count <= nsl_data.cbor.arg_int(r.parser) mod 8 - 1;
+            end if;
             rin.cmd_pending <= nsl_jtag.ate.ATE_OP_SHIFT;
             rin.state     <= ST_RSP_BSTR_HDR_PREP;
           elsif r.tag = 10 then
             rin.cmd_bit_count <= 0;
-            rin.word_count  <= nsl_data.cbor.arg_int(r.parser);
+            rin.word_count  <= nsl_data.cbor.arg_int(r.parser)-1;
             rin.cmd_pending <= nsl_jtag.ate.ATE_OP_RESET;
             rin.state       <= ST_ATE_RUN;
           elsif r.tag = 11 then -- run for ms
@@ -330,7 +344,7 @@ begin
         rin.has_tdo       <= true;
         rin.has_tdi       <= true;
         rin.data          <= (others => '-');
-        rin.bit_count     <= 0;
+        rin.bit_count     <= 8;
         rin.parser <= nsl_data.cbor.reset;
 
      when ST_ATE_RUN =>
@@ -343,16 +357,14 @@ begin
           if r.word_count /= 0 then
             rin.word_count <= r.word_count - 1;
             rin.state <= ST_ATE_RUN;
-            -- nsl_simulation.logging.log_info("in ST_ATE_WAIT_FOR_DONE with r.word_count = " & nsl_data.text.to_string(r.word_count) & ", going back to ST_ATE_RUN");
           else
             rin.state <= ST_CMD_END;
           end if;
         end if;
 
       when ST_DATA_GET =>
-        -- nsl_simulation.logging.log_info("in ST_DATA_GET with r.word_count = " & nsl_data.text.to_string(r.word_count) & ".");
         rin.cmd_bit_count <= data_max_size_c - 1;
-        if (r.word_count = 1) and (r.bit_count /= 0) then
+        if (r.word_count = 1) and (r.bit_count /= 8) then
           rin.cmd_bit_count <= r.bit_count;
         end if;
 
@@ -379,25 +391,17 @@ begin
 
       when ST_DATA_GET_RSP =>
         if s_rsp_valid = '1' then
-            rin.data <= s_rsp_data;
-            rin.state <= ST_DATA_PUT;
+          rin.data <= s_rsp_data;
+          rin.state <= ST_DATA_PUT;
         end if;
   
       when ST_DATA_PUT =>
-        if r.has_tdo then
-          if nsl_amba.axi4_stream.is_ready(axi_s_cfg_c, rsp_i) then
-            if r.word_count = 0 then
-              rin.state <= ST_CMD_END;
-            else
-              rin.state <= ST_DATA_GET;
-            end if;
-          end if;
+        if not r.has_tdo or nsl_amba.axi4_stream.is_ready(axi_s_cfg_c, rsp_i) then
+          if r.word_count = 0 then
+            rin.state <= ST_CMD_END;
           else
-            if r.word_count = 0 then
-              rin.state <= ST_CMD_END;
-            else
-              rin.state <= ST_DATA_GET;
-            end if;
+            rin.state <= ST_DATA_GET;
+          end if;
         end if;
 
       when ST_RSP_ARRAY_HDR_PREP =>
@@ -481,7 +485,14 @@ begin
       
     when ST_DATA_PUT =>
       if r.has_tdo then
-        rsp_o <= nsl_amba.axi4_stream.transfer( cfg => axi_s_cfg_c, bytes => nsl_data.bytestream.from_suv(r.data), last => r.last);
+        -- Mask upper bits for partial-byte shifts (minus tags or tag 8 with non-multiple of 8)
+        -- bit_count is size_m1: 0 means 1 bit valid, 6 means 7 bits valid, 8 means full byte
+        if r.word_count = 0 and r.bit_count /= 8 then
+          rsp_o <= nsl_amba.axi4_stream.transfer( cfg => axi_s_cfg_c,
+            bytes => nsl_data.bytestream.from_suv(r.data and bit_mask(r.bit_count)), last => r.last);
+        else
+          rsp_o <= nsl_amba.axi4_stream.transfer( cfg => axi_s_cfg_c, bytes => nsl_data.bytestream.from_suv(r.data), last => r.last);
+        end if;
       end if;
     
     when ST_RSP_BREAK_PUT =>

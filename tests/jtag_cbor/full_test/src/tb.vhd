@@ -120,7 +120,6 @@ begin
   dut: nsl_jtag.cbor_transactor.controller
   generic map(
     clock_i_hz_c => 10e7,
-    -- tick_i_hz_c  => 10e7/to_integer(tick_divisor),
     axi_s_cfg_c  => cfg_c
     )
   port map(
@@ -181,6 +180,7 @@ begin
   stim: process
     variable check_status : boolean := false;
     variable pass_count, fail_count : integer := 0;
+    variable dummy_frame : nsl_amba.axi4_stream.frame_t;
   begin
 
     nsl_amba.axi4_stream.frame_queue_init(cmd_q);
@@ -204,6 +204,59 @@ begin
       message => "======================================",
       color => nsl_simulation.logging.LOG_COLOR_CYAN
     );
+
+
+    -- Test 1: Reset command (tag 10) - verify s_tap_reset goes high
+    -- 81 = array(1), ca0a = reset(10 cycles)
+    nsl_amba.axi4_stream.frame_queue_put(cmd_q, nsl_data.bytestream.from_suv(x"81ca0a"));
+    wait until s_tap_reset = '1';
+    check_status := s_tap_reset = '1';
+    nsl_simulation.logging.log_test_result("TAP: Reset signal asserted", check_status, pass_count, fail_count);
+    nsl_amba.axi4_stream.frame_queue_get(rsp_q, dummy_frame, timeout => 1 ms);
+
+    -- wait for 50 us;
+
+    -- Test 2: Run command (positive integer) - verify s_tap_run goes high
+    -- 81 = array(1), 0a = run(10 cycles)
+    nsl_amba.axi4_stream.frame_queue_put(cmd_q, nsl_data.bytestream.from_suv(x"810a"));
+    wait until s_tap_run = '1';
+    check_status := s_tap_run = '1';
+    nsl_simulation.logging.log_test_result("TAP: Run signal asserted", check_status, pass_count, fail_count);
+    nsl_amba.axi4_stream.frame_queue_get(rsp_q, dummy_frame, timeout => 1 ms);
+
+    -- wait for 50 us;
+
+    -- Test 3: DR-Capture command (simple value 1) - verify s_tap_dr_capture pulses
+    -- 81 = array(1), e1 = simple(1) = dr-capture
+    nsl_amba.axi4_stream.frame_queue_put(cmd_q, nsl_data.bytestream.from_suv(x"81e1"));
+    wait until s_tap_dr_capture = '1';
+    check_status := s_tap_dr_capture = '1';
+    nsl_simulation.logging.log_test_result("TAP: DR-Capture signal asserted", check_status, pass_count, fail_count);
+    nsl_amba.axi4_stream.frame_queue_get(rsp_q, dummy_frame, timeout => 1 ms);
+
+    -- wait for 50 us;
+
+    -- Test 4: DR-Shift - verify s_tap_dr_shift goes high during shift
+    -- First do dr-capture, then shift 8 bits
+    -- 82 = array(2), e1 = dr-capture, c808 = shift_cycles(8)
+    nsl_amba.axi4_stream.frame_queue_put(cmd_q, nsl_data.bytestream.from_suv(x"82e1c808"));
+    wait until s_tap_dr_shift = '1';
+    check_status := s_tap_dr_shift = '1';
+    nsl_simulation.logging.log_test_result("TAP: DR-Shift signal asserted", check_status, pass_count, fail_count);
+    nsl_amba.axi4_stream.frame_queue_get(rsp_q, dummy_frame, timeout => 1 ms);
+
+    -- wait for 50 us;
+
+    -- Test 5: Run-time command (tag 11) - verify s_tap_run goes high for duration
+    -- 81 = array(1), cb01 = run-time(1 ms) 
+    nsl_amba.axi4_stream.frame_queue_put(cmd_q, nsl_data.bytestream.from_suv(x"81cb01"));
+    wait until s_tap_run = '1' for 1 ms;
+    check_status := s_tap_run = '1';
+    nsl_simulation.logging.log_test_result("TAP: Run-time signal asserted", check_status, pass_count, fail_count);
+    nsl_amba.axi4_stream.frame_queue_get(rsp_q, dummy_frame, timeout => 2 ms);
+
+    -- wait for 50 us;
+
     nsl_amba.axi4_stream.frame_queue_check_io(root_master => cmd_q,
                                               root_slave  => rsp_q,
                                               data1 => nsl_data.bytestream.from_suv(x"87ca0602e2c9411103e1c81820"),
@@ -214,16 +267,22 @@ begin
                                               sev     => warning);
     nsl_simulation.logging.log_test_result("IDCODE read", check_status, pass_count, fail_count);
 
+    -- Test 6: Shift with no TDI using shift_cycles (tag 8)
+    -- Command: reset(6), run(2), ir-capture, shift-no-tdo(0x11=IDCODE), run(3), dr-capture, shift_cycles(32)
+    -- 87 = array(7), ca06 = reset(6), 02 = run(2), e2 = ir-capture, c94111 = shift-no-tdo(0x11),
+    -- 03 = run(3), e1 = dr-capture, c81820 = shift_cycles(32)
+    -- Response: bstr with 4 bytes of IDCODE = 0x87654321 (LSB first: 21 43 65 87)
     nsl_amba.axi4_stream.frame_queue_check_io(root_master => cmd_q,
                                               root_slave  => rsp_q,
-                                              data1 => nsl_data.bytestream.from_suv(x"87ca0602e2c9411103e1c3c81820"),
-                                              data2 => nsl_data.bytestream.from_suv(x"9f59000421436507ff"),
+                                              data1 => nsl_data.bytestream.from_suv(x"87ca0602e2c9411103e1c81820"),
+                                              data2 => nsl_data.bytestream.from_suv(x"9f59000421436587ff"),
                                               check_status => check_status,
                                               dt      => clock_period,
                                               timeout => clock_period*2000000,
                                               sev     => warning);
-    nsl_simulation.logging.log_test_result("Minus with no TDI", check_status, pass_count, fail_count);
+    nsl_simulation.logging.log_test_result("Shift with no TDI (32 cycles)", check_status, pass_count, fail_count);
 
+    -- Test 7: Shift with minus and no TDO (minus 3 - do not shift last 3 bits of payload)
     nsl_amba.axi4_stream.frame_queue_check_io(root_master => cmd_q,
                                               root_slave  => rsp_q,
                                               data1 => nsl_data.bytestream.from_suv(x"87ca0602e2c3c9411103e1c81820"),
@@ -234,43 +293,30 @@ begin
                                               sev     => warning);
     nsl_simulation.logging.log_test_result("Minus with no TDO", check_status, pass_count, fail_count);
 
-    -- Test 4: Run for 3ms (response is empty indefinite array 9fff)
+    -- Test 8: Run for 3ms (response is empty indefinite array 9fff)
     nsl_amba.axi4_stream.frame_queue_check_io(root_master => cmd_q,
                                               root_slave  => rsp_q,
-                                              data1 => nsl_data.bytestream.from_suv(x"81CB03"),
+                                              data1 => nsl_data.bytestream.from_suv(x"81CB02"),
+                                              data2 => nsl_data.bytestream.from_suv(x"9fff"),
+                                              check_status => check_status,
+                                              dt      => clock_period,
+                                              timeout => clock_period*2000000 + 3 ms,
+                                              sev     => warning);
+    nsl_simulation.logging.log_test_result("Run for 3ms", check_status, pass_count, fail_count);
+   
+    -- Test 9 (Large shift)
+    nsl_amba.axi4_stream.frame_queue_check_io(root_master => cmd_q,
+                                              root_slave  => rsp_q,
+                                              data1 => nsl_data.bytestream.from_suv(x"9fc95903ffE8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8ff"),
                                               data2 => nsl_data.bytestream.from_suv(x"9fff"),
                                               check_status => check_status,
                                               dt      => clock_period,
                                               timeout => clock_period*2000000 + 4 ms,
                                               sev     => warning);
-    nsl_simulation.logging.log_test_result("Run for 3ms", check_status, pass_count, fail_count);
-   
-    -- nsl_simulation.logging.log(level => nsl_simulation.logging.LOG_LEVEL_INFO, message => "Testing Chain enum", color => nsl_simulation.logging.LOG_COLOR_BLUE);
-    -- nsl_amba.axi4_stream.frame_queue_check_io(root_master => cmd_q,
-    --                                           root_slave  => rsp_q,
-    --                                           data1 => nsl_data.bytestream.from_suv(x"8ae3ca183201e1440355ffc0c8190200e2440355ffc0c819020001"),
-    --                                           -- data2 => nsl_data.bytestream.from_suv(x"9f4487654321ff"),
-    --                                           data2 => nsl_data.bytestream.from_suv(x"9f4400000000ff"),
-    --                                          dt      => clock_period,
-    --                                           timeout => clock_period*2000000);
-    -- nsl_simulation.logging.log(level => nsl_simulation.logging.LOG_LEVEL_INFO, message => "==================================================================================== #1 CMD-RSP CHECK PASSED" & LF, color => nsl_simulation.logging.LOG_COLOR_GREEN);
+    nsl_simulation.logging.log_test_result("Large shift operation", check_status, pass_count, fail_count);
 
-    -- Test 5 (Large shift)
-    -- nsl_amba.axi4_stream.frame_queue_check_io(root_master => cmd_q,
-    --                                           root_slave  => rsp_q,
-    --                                           data1 => nsl_data.bytestream.from_suv(x"9fc95900ffE8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8E8ff"),
-    --                                           data2 => nsl_data.bytestream.from_suv(x"9fff"),
-    --                                           check_status => check_status,
-    --                                           dt      => clock_period,
-    --                                           timeout => clock_period*2000000 + 4 ms,
-    --                                           sev     => warning);
-    -- nsl_simulation.logging.log_test_result("Large shift operation", check_status, pass_count, fail_count);
-
-    wait for 100 us;
-
-    -- Test 6: Read 16 bits of IDCODE (similar to test 1 but fewer bits)
+    -- Test 10: Read 16 bits of IDCODE (similar to test 1 but fewer bits)
     -- Command: reset(6), run(2), ir-capture, shift-no-tdo(0x11=IDCODE), run(3), dr-capture, shift_cycles(16)
-    -- 87 = array(7), ca06 = reset(6), 02 = run(2), e2 = ir-capture, c94111 = shift-no-tdo(0x11),
     -- 03 = run(3), e1 = dr-capture, c810 = shift_cycles(16)
     nsl_amba.axi4_stream.frame_queue_check_io(root_master => cmd_q,
                                               root_slave  => rsp_q,
@@ -282,13 +328,9 @@ begin
                                               sev     => warning);
     nsl_simulation.logging.log_test_result("IDCODE read (16 bits)", check_status, pass_count, fail_count);
 
-    wait for 100 us;
-
-    -- Test 7: BYPASS mode
+    -- Test 11: BYPASS mode
     -- Command: reset(6), run(2), ir-capture, shift-no-tdo(0x0F=BYPASS), run(3), dr-capture, shift_cycles(8)
     -- BYPASS is a 1-bit register, shift 8 bits of zeros (shift_cycles with no TDI data)
-    -- 87 = array(7), ca06 = reset(6), 02 = run(2), e2 = ir-capture, c9410f = shift-no-tdo(0x0F),
-    -- 03 = run(3), e1 = dr-capture, c808 = shift_cycles(8)
     -- Response: bstr with 1 byte = 0x00 (shifted zeros through BYPASS)
     nsl_amba.axi4_stream.frame_queue_check_io(root_master => cmd_q,
                                               root_slave  => rsp_q,
@@ -300,28 +342,33 @@ begin
                                               sev     => warning);
     nsl_simulation.logging.log_test_result("BYPASS mode (8 cycles)", check_status, pass_count, fail_count);
 
-    wait for 100 us;
-
-    -- Test 8: Shift minus-7 (#6.7) - shift only 1 bit from a byte
+    -- Test 12: Shift minus-7 (#6.7) - do not shift the last 7 bits of the argument
     -- After BYPASS is still loaded, do dr-capture, then shift 1 bit
-    -- c7 = tag7 (minus-7), 41aa = bstr(1 byte: 0xaa), only 1 bit shifted (8-7=1)
-    -- 83 = array(3), e1 = dr-capture, c741aa = minus-7(bstr(0xaa)), 00 = run(0)
     -- Response: bstr with 1 byte, TDO depends on BYPASS state
     nsl_amba.axi4_stream.frame_queue_check_io(root_master => cmd_q,
                                               root_slave  => rsp_q,
                                               data1 => nsl_data.bytestream.from_suv(x"83e1c741aa00"),
-                                              data2 => nsl_data.bytestream.from_suv(x"9f59000154ff"),
+                                              data2 => nsl_data.bytestream.from_suv(x"9f59000100ff"),
                                               check_status => check_status,
                                               dt      => clock_period,
                                               timeout => clock_period*2000000,
                                               sev     => warning);
     nsl_simulation.logging.log_test_result("Shift minus-7 (1 bit)", check_status, pass_count, fail_count);
 
-    wait for 100 us;
+    -- Test 13: Shift minus-1 (#6.1) - do not shft the last bit of the argument
+    -- After BYPASS is still loaded, do dr-capture, then shift 1 bit
+    -- Response: bstr with 1 byte, TDO depends on BYPASS state
+    nsl_amba.axi4_stream.frame_queue_check_io(root_master => cmd_q,
+                                              root_slave  => rsp_q,
+                                              data1 => nsl_data.bytestream.from_suv(x"83e1c141aa00"),
+                                              data2 => nsl_data.bytestream.from_suv(x"9f59000154ff"),
+                                              check_status => check_status,
+                                              dt      => clock_period,
+                                              timeout => clock_period*2000000,
+                                              sev     => warning);
+    nsl_simulation.logging.log_test_result("Shift minus-1 (7 bit)", check_status, pass_count, fail_count);
 
-    -- Test 9: Shift minus-4 (#6.4) - shift 4 bits from a byte
-    -- c4 = tag4 (minus-4), 41aa = bstr(1 byte: 0xaa), shifts 4 bits (8-4=4)
-    -- 83 = array(3), e1 = dr-capture, c441aa = minus-4(bstr(0xaa)), 00 = run(0)
+    -- Test 14: Shift minus-4 (#6.4) - do not shft the last 4 bits of the argument
     -- Response: bstr with 1 byte, TDO depends on BYPASS state
     nsl_amba.axi4_stream.frame_queue_check_io(root_master => cmd_q,
                                               root_slave  => rsp_q,
@@ -333,11 +380,8 @@ begin
                                               sev     => warning);
     nsl_simulation.logging.log_test_result("Shift minus-4 (4 bits)", check_status, pass_count, fail_count);
 
-    wait for 100 us;
-
-    -- Test 10: IR scan with TDO capture (not using shift-no-tdo)
+    -- Test 15: IR scan with TDO capture (not using shift-no-tdo)
     -- Reset, run, ir-capture, shift IR with TDO capture (not c9 tagged)
-    -- 85 = array(5), ca06 = reset(6), 02 = run(2), e2 = ir-capture, 4111 = bstr(0x11), 00 = run(0)
     -- Response: bstr with captured IR output = 0x01 (default IR value after reset is 0x02,
     -- shifted out LSB first during IR scan, giving captured value 0x01)
     nsl_amba.axi4_stream.frame_queue_check_io(root_master => cmd_q,
@@ -350,10 +394,21 @@ begin
                                               sev     => warning);
     nsl_simulation.logging.log_test_result("IR scan with TDO capture", check_status, pass_count, fail_count);
 
-    wait for 100 us;
+    -- Test 16: Shift cycles non-multiple of 8 (#6.8(12)) - 12 bits = 1.5 bytes
+    -- After IDCODE is loaded from previous tests, do dr-capture, then shift 12 bits
+    -- IDCODE = 0x87654321, lower 12 bits = 0x321
+    -- Response: bstr with 2 bytes: 0x21 (bits 7..0), 0x03 (bits 11..8, masked)
+    nsl_amba.axi4_stream.frame_queue_check_io(root_master => cmd_q,
+                                              root_slave  => rsp_q,
+                                              data1 => nsl_data.bytestream.from_suv(x"87ca0602e2c9411103e1c80c"),
+                                              data2 => nsl_data.bytestream.from_suv(x"9f5900022103ff"),
+                                              check_status => check_status,
+                                              dt      => clock_period,
+                                              timeout => clock_period*2000000,
+                                              sev     => warning);
+    nsl_simulation.logging.log_test_result("Shift cycles non-multiple of 8 (12 bits)", check_status, pass_count, fail_count);
 
-    -- Test 11: Extended reset cycles (larger count)
-    -- 82 = array(2), ca1864 = reset(100 cycles), 00 = run(0)
+    -- Test 17: Extended reset cycles (larger count)
     -- Response: empty (9fff)
     nsl_amba.axi4_stream.frame_queue_check_io(root_master => cmd_q,
                                               root_slave  => rsp_q,
@@ -365,17 +420,13 @@ begin
                                               sev     => warning);
     nsl_simulation.logging.log_test_result("Extended reset (100 cycles)", check_status, pass_count, fail_count);
 
-    wait for 100 us;
-
-    -- Test 12: Back-to-back DR shifts (multiple shifts in one command)
+    -- Test 18: Back-to-back DR shifts (multiple shifts in one command)
     -- Reset, run, load IDCODE, run, dr-capture, shift 8 bits x3, run
-    -- 8a = array(10), ca06 = reset(6), 02 = run(2), e2 = ir-capture, c94111 = shift-no-tdo(0x11),
-    -- 03 = run(3), e1 = dr-capture, c808 = shift_cycles(8), c808, c808, 00 = run(0)
     -- Response: 3 bstr entries (each 1 byte with 2-byte length encoding)
     -- IDCODE = 0x87654321, shifted LSB first: 0x21, 0x43, 0x65
     nsl_amba.axi4_stream.frame_queue_check_io(root_master => cmd_q,
                                               root_slave  => rsp_q,
-                                              data1 => nsl_data.bytestream.from_suv(x"8aca0602e2c9411103e1c808c808c80800"),
+                                              data1 => nsl_data.bytestream.from_suv(x"89ca0602e2c94111e1c808c808c80800"),
                                               data2 => nsl_data.bytestream.from_suv(x"9f590001215900014359000165ff"),
                                               check_status => check_status,
                                               dt      => clock_period,
@@ -383,7 +434,7 @@ begin
                                               sev     => warning);
     nsl_simulation.logging.log_test_result("Back-to-back DR shifts", check_status, pass_count, fail_count);
 
-    wait for 5 ms;
+    wait for 100 us;
 
     nsl_simulation.logging.log_test_suite_summary("JTAG CBOR TRANSACTOR TESTS", pass_count, fail_count);
 
@@ -400,7 +451,7 @@ begin
     wait for 70 ns;
     nsl_simulation.logging.log(level => nsl_simulation.logging.LOG_LEVEL_INFO, message => "Going to run frame_queue_master", color => nsl_simulation.logging.LOG_COLOR_MAGENTA);
     nsl_amba.axi4_stream.frame_queue_master(cfg => cfg_c, root => cmd_q, clock => s_clk,
-                                            stream_i => s_cmd.s, stream_o => s_cmd.m, dt => clock_period); --, timeout => 200000 ms);
+                                            stream_i => s_cmd.s, stream_o => s_cmd.m, dt => clock_period);
   end process;
   
   rsp_queue: process
