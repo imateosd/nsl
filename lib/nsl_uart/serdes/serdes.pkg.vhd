@@ -83,9 +83,9 @@ package serdes is
       valid_i     : in std_ulogic;
       
       -- bit_count   : in unsigned(3 downto 0); -- range 7 to 8
-      stop_count  : in unsigned(1 downto 0); -- range 1 to 2
-      parity      : in unsigned(1 downto 0); -- encoded value of parity_t
-      rtr_active  : in std_ulogic := '0'
+      stop_count_i: in unsigned(1 downto 0); -- range 1 to 2
+      parity_i    : in unsigned(1 downto 0); -- encoded value of parity_t
+      rtr_active_i: in std_ulogic := '0'
       );
   end component;
 

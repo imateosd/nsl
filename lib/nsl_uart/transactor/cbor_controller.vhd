@@ -635,9 +635,9 @@ begin
       parity_error_o => open,
       break_o     => open,
 
-      stop_count => stop_count_s,
-      parity => parity_s,
-      handshake_active => r.hs
+      stop_count_i       => stop_count_s,
+      parity_i           => parity_s,
+      handshake_active_i => r.hs
     );
 
 end architecture;

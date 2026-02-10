@@ -624,8 +624,8 @@ begin
       ready_o => uart_tx_ready_s,
       valid_i => uart_tx_valid_s,
 
-      stop_count => stop_count_s,
-      parity => parity_s
+      stop_count_i => stop_count_s,
+      parity_i => parity_s
       );
 
   -- UART RX (byte-level interface)

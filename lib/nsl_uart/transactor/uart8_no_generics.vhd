@@ -5,9 +5,6 @@ use ieee.numeric_std.all;
 library nsl_bnoc, nsl_uart, nsl_clocking;
 
 entity uart8_no_generics is
-  generic(
-    stop_count_c : natural range 1 to 2 := 1
-    );
   port(
     reset_n_i    : in std_ulogic;
     clock_i      : in std_ulogic;
@@ -22,17 +19,17 @@ entity uart8_no_generics is
     cts_o  : out std_ulogic;
     rx_o   : out std_ulogic;
     
-    tx_data_i  : in  nsl_bnoc.pipe.pipe_req_t;
-    tx_data_o  : out nsl_bnoc.pipe.pipe_ack_t;
-    rx_data_i  : in  nsl_bnoc.pipe.pipe_ack_t;
-    rx_data_o  : out nsl_bnoc.pipe.pipe_req_t;
+    tx_data_i : in  nsl_bnoc.pipe.pipe_req_t;
+    tx_data_o : out nsl_bnoc.pipe.pipe_ack_t;
+    rx_data_i : in  nsl_bnoc.pipe.pipe_ack_t;
+    rx_data_o : out nsl_bnoc.pipe.pipe_req_t;
 
     parity_error_o : out std_ulogic;
     break_o        : out std_ulogic;
 
-    stop_count       : in unsigned(1 downto 0);
-    parity           : in unsigned(1 downto 0);
-    handshake_active : in std_ulogic := '0'
+    stop_count_i       : in unsigned(1 downto 0);
+    parity_i           : in unsigned(1 downto 0);
+    handshake_active_i : in std_ulogic := '0'
     );
 end entity;
 
@@ -75,9 +72,9 @@ begin
       ready_o => tx_data_o.ready,
       valid_i => tx_data_i.valid,
     
-      stop_count => stop_count,
-      parity => parity,
-      rtr_active => handshake_active
+      stop_count_i => stop_count_i,
+      parity_i     => parity_i,
+      rtr_active_i => handshake_active_i
       );
 
   rx: nsl_uart.serdes.uart_rx_no_generics
@@ -100,10 +97,9 @@ begin
       parity_error_o => parity_error_o,
       break_o => break_o,
       
-      stop_count => stop_count,
-      parity => parity,
-      -- parity     => nsl_uart.serdes.parity_t'pos(parity),
-      rts_active => handshake_active
+      stop_count_i => stop_count_i,
+      parity_i     => parity_i,
+      rts_active_i => handshake_active_i
       );
 
 end;

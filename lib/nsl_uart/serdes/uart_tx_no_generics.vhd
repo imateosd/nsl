@@ -22,9 +22,9 @@ entity uart_tx_no_generics is
     ready_o     : out std_ulogic;
     valid_i     : in std_ulogic;
     
-    stop_count  : in unsigned(1 downto 0); -- range 1 to 2
-    parity      : in unsigned(1 downto 0); -- encoded value of parity_t
-    rtr_active  : in std_ulogic := '0'
+    stop_count_i: in unsigned(1 downto 0); -- range 1 to 2
+    parity_i    : in unsigned(1 downto 0); -- encoded value of parity_t
+    rtr_active_i: in std_ulogic := '0'
     );
 end entity;
 
@@ -38,11 +38,6 @@ architecture beh of uart_tx_no_generics is
     ST_SHIFT
     );
 
-  -- constant shreg_width: natural := bit_count_c+stop_count_c + 2;
-  -- constant stop_par: std_ulogic_vector(stop_count_c + 1 - 1 downto 0) := (others => '1');
-  -- constant parity_bit: natural := bit_count_c + 1;
-
-  -- constant max_bit_count_c   : natural := 8;
   constant max_stop_count_c  : natural := 2;
   constant max_shreg_width_c : natural := bit_count_c+max_stop_count_c + 2;
   
@@ -73,7 +68,7 @@ begin
     end if;
   end process;
 
-  transition: process(r, data_i, valid_i, divisor_i, rtr_i, rtr_active, stop_count, parity)
+  transition: process(r, data_i, valid_i, divisor_i, rtr_i, rtr_active_i, stop_count_i, parity_i)
   begin
     rin <= r;
 
@@ -86,53 +81,53 @@ begin
           rin.state <= ST_PREPARE;
           -- Use fixed slice bounds for each stop_count case (1 or 2)
           -- to avoid variable-width slices which Vivado can't synthesize
-          if stop_count = 1 then
+          if stop_count_i = 1 then
             -- total_count = 1 + 1 + bit_count_c + 1 = bit_count_c + 3
             -- For bit_count_c=8: total=11, shreg uses bits 11..1
             rin.shreg(max_shreg_width_c-1 downto max_shreg_width_c-(bit_count_c+3)) <=
               stop_par(1 downto 0) & data_i(bit_count_c-1 downto 0) & start;
             rin.shreg(max_shreg_width_c-(bit_count_c+3)-1 downto 0) <= (others => '-');
             rin.bit_ctr <= 1 + bit_count_c;
-          else -- stop_count = 2
+          else -- stop_count_i = 2
             -- total_count = 2 + 1 + bit_count_c + 1 = bit_count_c + 4
             rin.shreg(max_shreg_width_c-1 downto max_shreg_width_c-(bit_count_c+4)) <=
               stop_par(2 downto 0) & data_i(bit_count_c-1 downto 0) & start;
             rin.shreg(max_shreg_width_c-(bit_count_c+4)-1 downto 0) <= (others => '-');
             rin.bit_ctr <= 2 + bit_count_c;
           end if;
-        elsif rtr_active = '1' and rtr_i = '0' then
+        elsif rtr_active_i = '1' and rtr_i = '0' then
           -- Handshake enabled and receiver not ready - wait for CTS
           rin.state <= ST_WAIT;
         end if;
 
       when ST_WAIT =>
-        if rtr_active = '0' or rtr_i = '1' then
+        if rtr_active_i = '0' or rtr_i = '1' then
           -- Handshake disabled or receiver is ready
           rin.state <= ST_IDLE;
         end if;
 
       when ST_PREPARE =>
         rin.divisor <= divisor_i;
-        -- Use fixed slice bounds for each stop_count case to avoid variable-width slices
-        case parity_t'val(to_integer(parity)) is
+        -- Use fixed slice bounds for each stop_count_i case to avoid variable-width slices
+        case parity_t'val(to_integer(parity_i)) is
           when PARITY_NONE =>
             rin.bit_ctr <= r.bit_ctr;
 
           when PARITY_EVEN =>
             rin.bit_ctr <= r.bit_ctr + 1;
-            if stop_count = 1 then
+            if stop_count_i = 1 then
               -- parity_bit=1, total_count=bit_count_c+3
               rin.shreg(1) <= nsl_logic.logic.xor_reduce(r.shreg(0 downto max_shreg_width_c-(bit_count_c+3)));
-            else -- stop_count = 2
+            else -- stop_count_i = 2
               -- parity_bit=2, total_count=bit_count_c+4
               rin.shreg(2) <= nsl_logic.logic.xor_reduce(r.shreg(1 downto max_shreg_width_c-(bit_count_c+4)));
             end if;
 
           when PARITY_ODD =>
             rin.bit_ctr <= r.bit_ctr + 1;
-            if stop_count = 1 then
+            if stop_count_i = 1 then
               rin.shreg(1) <= not nsl_logic.logic.xor_reduce(r.shreg(0 downto max_shreg_width_c-(bit_count_c+3)));
-            else -- stop_count = 2
+            else -- stop_count_i = 2
               rin.shreg(2) <= not nsl_logic.logic.xor_reduce(r.shreg(1 downto max_shreg_width_c-(bit_count_c+4)));
             end if;
         end case;
@@ -148,7 +143,7 @@ begin
           rin.shreg <= "-" & r.shreg(r.shreg'left downto 1);
         else
           -- Transmission complete, go back to idle (or wait for CTS if handshake enabled)
-          if rtr_active = '1' and rtr_i = '0' then
+          if rtr_active_i = '1' and rtr_i = '0' then
             rin.state <= ST_WAIT;
           else
             rin.state <= ST_IDLE;
