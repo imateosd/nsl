@@ -34,7 +34,7 @@ begin
       stop_count_c => 1,
       parity_c => nsl_uart.serdes.PARITY_NONE,
       handshake_active_c => '0',
-      divisor_c => to_unsigned(10416, 32), -- 9600 bds
+      divisor_c => to_unsigned(868, 32), -- 115200 bds
       timeout_c => to_unsigned(2000, 32), -- timeout in bit time
       bstr_max_size_c => 12
       )
@@ -108,7 +108,7 @@ begin
 
     nsl_amba.axi4_stream.frame_queue_check_io(root_master => cmd_q,
                                               root_slave  => rsp_q,
-                                              data1 => nsl_data.bytestream.from_suv(x"A369666C6F772D6374726C6363747366706172697479616569626175642D72617465192580"),
+                                              data1 => nsl_data.bytestream.from_suv(x"A369666C6F772D6374726C6363747366706172697479616569626175642D726174651a0001c200"),
                                               data2 => nsl_data.bytestream.from_suv(x"F5"),
                                               check_status => check_status,
                                               dt      => c_clock_period,
@@ -138,13 +138,172 @@ begin
     nsl_amba.axi4_stream.frame_queue_check_io(root_master => cmd_q,
                                               root_slave  => rsp_q,
                                               data1 => nsl_data.bytestream.from_suv(x"F6"),
-                                              data2 => nsl_data.bytestream.from_suv(x"A369666C6F772D6374726C6363747366706172697479616569626175642D726174651a00002580"),
+                                              data2 => nsl_data.bytestream.from_suv(x"A369666C6F772D6374726C6363747366706172697479616569626175642D726174651a0001c200"),
                                               check_status => check_status,
                                               dt      => c_clock_period,
                                               timeout => c_clock_period*1500000,
                                               sev     => warning);
-    nsl_simulation.logging.log_test_result("Retrieve configuration", check_status, pass_count, fail_count);    
+    nsl_simulation.logging.log_test_result("Retrieve configuration", check_status, pass_count, fail_count);
 
+    -- Test 5: Single byte message
+    -- Note: For short messages, TX confirmation (F5) arrives BEFORE RX loopback data
+    -- because TX state machine finishes when data is queued, not when transmitted
+    -- Command: bstr(1 byte) = 41 xx
+    nsl_amba.axi4_stream.frame_queue_put(root => cmd_q,
+                                         data => nsl_data.bytestream.from_suv(x"41aa"));
+
+    -- First expect TX confirmation (F5)
+    nsl_amba.axi4_stream.frame_queue_check(root => rsp_q,
+                                           data => nsl_data.bytestream.from_suv(x"f5"),
+                                           check_status => check_status,
+                                           dt      => c_clock_period,
+                                           timeout => c_clock_period*1500000,
+                                           sev     => warning);
+    nsl_simulation.logging.log_test_result("Single byte TX confirmation", check_status, pass_count, fail_count);
+
+    -- Then expect RX loopback data: bstr_hdr(1) + data = 59 00 01 xx
+    nsl_amba.axi4_stream.frame_queue_check(root => rsp_q,
+                                           data => nsl_data.bytestream.from_suv(x"590001aa"),
+                                           check_status => check_status,
+                                           dt      => c_clock_period,
+                                           timeout => c_clock_period*25000000,
+                                           sev     => warning);
+    nsl_simulation.logging.log_test_result("Single byte RX loopback", check_status, pass_count, fail_count);
+
+    -- Test 7: Configure no parity
+    -- Command: map(3) {flow-ctrl: "cts", parity: "n", baud-rate: 9600}
+    -- A3 69 "flow-ctrl" 63 "cts" 66 "parity" 61 "n" 69 "baud-rate" 19 2580
+    nsl_amba.axi4_stream.frame_queue_check_io(root_master => cmd_q,
+                                              root_slave  => rsp_q,
+                                              data1 => nsl_data.bytestream.from_suv(x"A369666C6F772D6374726C636374736670617269747961" & x"6e" & x"69626175642D726174651a0001c200"),
+                                              data2 => nsl_data.bytestream.from_suv(x"F5"),
+                                              check_status => check_status,
+                                              dt      => c_clock_period,
+                                              timeout => c_clock_period*1500000,
+                                              sev     => warning);
+    nsl_simulation.logging.log_test_result("Configure no parity", check_status, pass_count, fail_count);
+
+    -- Test 8: Verify parity change via query
+    nsl_amba.axi4_stream.frame_queue_check_io(root_master => cmd_q,
+                                              root_slave  => rsp_q,
+                                              data1 => nsl_data.bytestream.from_suv(x"F6"),
+                                              data2 => nsl_data.bytestream.from_suv(x"A369666C6F772D6374726C636374736670617269747961" & x"6e" & x"69626175642D726174651a0001c200"),
+                                              check_status => check_status,
+                                              dt      => c_clock_period,
+                                              timeout => c_clock_period*1500000,
+                                              sev     => warning);
+    nsl_simulation.logging.log_test_result("Verify no parity config", check_status, pass_count, fail_count);
+
+    -- Test 9: Send message with no parity ("TEST" = 4 bytes)
+    -- For medium messages, RX data arrives first, then F5 (like "Hello world!")
+    -- Command: 44 54 45 53 54 = bstr(4) "TEST"
+    -- Response: 59 00 04 54 45 53 54 = bstr_hdr(4) + "TEST"
+    nsl_amba.axi4_stream.frame_queue_check_io(root_master => cmd_q,
+                                              root_slave  => rsp_q,
+                                              data1 => nsl_data.bytestream.from_suv(x"4454455354"),
+                                              data2 => nsl_data.bytestream.from_suv(x"59000454455354"),
+                                              check_status => check_status,
+                                              dt      => c_clock_period,
+                                              timeout => c_clock_period*25000000,
+                                              sev     => warning);
+    nsl_simulation.logging.log_test_result("Message with no parity (TEST)", check_status, pass_count, fail_count);
+
+    -- Consume TX confirmation
+    nsl_amba.axi4_stream.frame_queue_check(root => rsp_q,
+                                           data => nsl_data.bytestream.from_suv(x"f5"),
+                                           check_status => check_status,
+                                           dt      => c_clock_period,
+                                           timeout => c_clock_period*1500000,
+                                           sev     => warning);
+    nsl_simulation.logging.log_test_result("No parity TX confirmation", check_status, pass_count, fail_count);
+
+    -- Test 11: Configure odd parity
+    -- parity: "o" = 61 6f
+    nsl_amba.axi4_stream.frame_queue_check_io(root_master => cmd_q,
+                                              root_slave  => rsp_q,
+                                              data1 => nsl_data.bytestream.from_suv(x"A369666C6F772D6374726C636374736670617269747961" & x"6f" & x"69626175642D726174651a0001c200"),
+                                              data2 => nsl_data.bytestream.from_suv(x"F5"),
+                                              check_status => check_status,
+                                              dt      => c_clock_period,
+                                              timeout => c_clock_period*1500000,
+                                              sev     => warning);
+    nsl_simulation.logging.log_test_result("Configure odd parity", check_status, pass_count, fail_count);
+
+    -- Test 12: Verify odd parity via query
+    nsl_amba.axi4_stream.frame_queue_check_io(root_master => cmd_q,
+                                              root_slave  => rsp_q,
+                                              data1 => nsl_data.bytestream.from_suv(x"F6"),
+                                              data2 => nsl_data.bytestream.from_suv(x"A369666C6F772D6374726C636374736670617269747961" & x"6f" & x"69626175642D726174651a0001c200"),
+                                              check_status => check_status,
+                                              dt      => c_clock_period,
+                                              timeout => c_clock_period*1500000,
+                                              sev     => warning);
+    nsl_simulation.logging.log_test_result("Verify odd parity config", check_status, pass_count, fail_count);
+
+    -- Test 13: Configure no flow control
+    -- flow-ctrl: "none" = 64 6e6f6e65
+    nsl_amba.axi4_stream.frame_queue_check_io(root_master => cmd_q,
+                                              root_slave  => rsp_q,
+                                              data1 => nsl_data.bytestream.from_suv(x"A369666C6F772D6374726C" & x"646e6f6e65" & x"6670617269747961" & x"6e" & x"69626175642D726174651a0001c200"),
+                                              data2 => nsl_data.bytestream.from_suv(x"F5"),
+                                              check_status => check_status,
+                                              dt      => c_clock_period,
+                                              timeout => c_clock_period*1500000,
+                                              sev     => warning);
+    nsl_simulation.logging.log_test_result("Configure no flow control", check_status, pass_count, fail_count);
+
+    -- Test 14: Verify no flow control via query
+    nsl_amba.axi4_stream.frame_queue_check_io(root_master => cmd_q,
+                                              root_slave  => rsp_q,
+                                              data1 => nsl_data.bytestream.from_suv(x"F6"),
+                                              data2 => nsl_data.bytestream.from_suv(x"A369666C6F772D6374726C" & x"646e6f6e65" & x"6670617269747961" & x"6e" & x"69626175642D726174651a0001c200"),
+                                              check_status => check_status,
+                                              dt      => c_clock_period,
+                                              timeout => c_clock_period*1500000,
+                                              sev     => warning);
+    nsl_simulation.logging.log_test_result("Verify no flow control config", check_status, pass_count, fail_count);
+
+    -- Test 15: Send message with special characters (0x00, 0xff)
+    -- bstr(4) = 44 00 ff 55 aa - For medium messages, RX data arrives first
+    nsl_amba.axi4_stream.frame_queue_check_io(root_master => cmd_q,
+                                              root_slave  => rsp_q,
+                                              data1 => nsl_data.bytestream.from_suv(x"4400ff55aa"),
+                                              data2 => nsl_data.bytestream.from_suv(x"5900" & x"0400ff55aa"),
+                                              check_status => check_status,
+                                              dt      => c_clock_period,
+                                              timeout => c_clock_period*25000000,
+                                              sev     => warning);
+    nsl_simulation.logging.log_test_result("Message with special chars", check_status, pass_count, fail_count);
+
+    -- Consume TX confirmation
+    nsl_amba.axi4_stream.frame_queue_check(root => rsp_q,
+                                           data => nsl_data.bytestream.from_suv(x"f5"),
+                                           check_status => check_status,
+                                           dt      => c_clock_period,
+                                           timeout => c_clock_period*1500000,
+                                           sev     => warning);
+    nsl_simulation.logging.log_test_result("Special chars TX confirmation", check_status, pass_count, fail_count);
+
+    -- Test 17: Maximum size message (12 bytes = bstr_max_size_c)
+    -- bstr(12) = 4c + 12 bytes
+    nsl_amba.axi4_stream.frame_queue_check_io(root_master => cmd_q,
+                                              root_slave  => rsp_q,
+                                              data1 => nsl_data.bytestream.from_suv(x"4c" & x"001122334455667788" & x"99aabb"),
+                                              data2 => nsl_data.bytestream.from_suv(x"59000c" & x"001122334455667788" & x"99aabb"),
+                                              check_status => check_status,
+                                              dt      => c_clock_period,
+                                              timeout => c_clock_period*2000000,
+                                              sev     => warning);
+    nsl_simulation.logging.log_test_result("Maximum size message (12 bytes)", check_status, pass_count, fail_count);
+
+    -- Consume TX confirmation
+    nsl_amba.axi4_stream.frame_queue_check(root => rsp_q,
+                                           data => nsl_data.bytestream.from_suv(x"f5"),
+                                           check_status => check_status,
+                                           dt      => c_clock_period,
+                                           timeout => c_clock_period*1500000,
+                                           sev     => warning);
+    nsl_simulation.logging.log_test_result("Max size TX confirmation", check_status, pass_count, fail_count);
 
     nsl_simulation.logging.log_test_suite_summary("UART CBOR TRANSACTOR TESTS", pass_count, fail_count);
 
