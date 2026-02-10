@@ -40,6 +40,16 @@ architecture rtl of cbor_controller is
   constant cbr_hdr_max_size_c : natural := 9;
   constant buffer_cfg_c       : nsl_amba.axi4_stream.buffer_config_t := nsl_amba.axi4_stream.buffer_config(axi_s_cfg_c, 5*cbr_hdr_max_size_c);
 
+  constant FLOW_CTRL_STR_C : string := "flow-ctrl";
+  constant PARITY_STR_C    : string := "parity";
+  constant BAUD_RATE_STR_C : string := "baud-rate";
+  constant NONE_STR_C      : string := "none";
+  constant CTS_STR_C       : string := "cts";
+  constant XON_STR_C       : string := "xon";
+  constant N_STR_C         : string := "n";
+  constant E_STR_C         : string := "e";
+  constant O_STR_C         : string := "o";
+  
   constant DIV_300     : unsigned := to_unsigned(system_clock_c / 300,     32);
   constant DIV_1200    : unsigned := to_unsigned(system_clock_c / 1200,    32);
   constant DIV_2400    : unsigned := to_unsigned(system_clock_c / 2400,    32);
@@ -151,7 +161,6 @@ architecture rtl of cbor_controller is
     stop_count  : natural range 1 to 2;
     divisor     : unsigned(31 downto 0);
     
-    -- encoded     : nsl_data.bytestream.byte_string(100 downto 0);
     encoded     : nsl_amba.axi4_stream.buffer_t;
     last        : boolean;
   end record;
@@ -261,11 +270,11 @@ begin
         else
           nsl_simulation.logging.log_info("Parsed string is " & nsl_data.bytestream.to_character_string(r.str));
           if r.map_state = MAP_KEY then
-            if nsl_data.bytestream.to_character_string(r.str) = "flow-ctrl" then
+            if nsl_data.bytestream.to_character_string(r.str) = FLOW_CTRL_STR_C then
               rin.map_state <= MAP_VAL_FC;
-            elsif nsl_data.bytestream.to_character_string(r.str(3 to 8)) = "parity" then
+            elsif nsl_data.bytestream.to_character_string(r.str(3 to 8)) = PARITY_STR_C then
               rin.map_state <= MAP_VAL_PAR;
-            elsif nsl_data.bytestream.to_character_string(r.str) = "baud-rate" then
+            elsif nsl_data.bytestream.to_character_string(r.str) = BAUD_RATE_STR_C then
               rin.map_state <= MAP_VAL_BR;
             end if;
 
@@ -274,20 +283,20 @@ begin
           else
 
             if r.map_state = MAP_VAL_FC then
-              if nsl_data.bytestream.to_character_string(r.str(5 to 8)) = "none" then
+              if nsl_data.bytestream.to_character_string(r.str(5 to 8)) = NONE_STR_C then
                 rin.hs <= '0';
-              elsif nsl_data.bytestream.to_character_string(r.str(6 to 8)) = "cts" then
+              elsif nsl_data.bytestream.to_character_string(r.str(6 to 8)) = CTS_STR_C then
                 rin.hs <= '1';
-              elsif nsl_data.bytestream.to_character_string(r.str(6 to 8)) = "xon" then
+              elsif nsl_data.bytestream.to_character_string(r.str(6 to 8)) = XON_STR_C then
                 rin.hs <= '0';
               end if;
               
             elsif r.map_state = MAP_VAL_PAR then
-              if nsl_data.bytestream.to_character_string(r.str(8 to 8)) = "n" then
+              if nsl_data.bytestream.to_character_string(r.str(8 to 8)) = N_STR_C then
                 rin.parity <= nsl_uart.serdes.PARITY_NONE;
-              elsif nsl_data.bytestream.to_character_string(r.str(8 to 8)) = "e" then
+              elsif nsl_data.bytestream.to_character_string(r.str(8 to 8)) = E_STR_C then
                 rin.parity <= nsl_uart.serdes.PARITY_EVEN;
-              elsif nsl_data.bytestream.to_character_string(r.str(8 to 8)) = "o" then
+              elsif nsl_data.bytestream.to_character_string(r.str(8 to 8)) = O_STR_C then
                 rin.parity <= nsl_uart.serdes.PARITY_ODD ;
               end if;
               
@@ -317,24 +326,24 @@ begin
           when 0 =>
             rin.encoded <= nsl_amba.axi4_stream.reset(buffer_cfg_c, nsl_data.cbor.cbor_map_hdr(length => to_unsigned(3, 2)));
           when 1 =>
-            rin.encoded <= nsl_amba.axi4_stream.reset(buffer_cfg_c, nsl_data.cbor.cbor_tstr("flow-ctrl"));
+            rin.encoded <= nsl_amba.axi4_stream.reset(buffer_cfg_c, nsl_data.cbor.cbor_tstr(FLOW_CTRL_STR_C));
           when 2 =>
             case r.hs is
-              when '0' => rin.encoded <= nsl_amba.axi4_stream.reset(buffer_cfg_c, nsl_data.cbor.cbor_tstr("none"));
-              when '1' => rin.encoded <= nsl_amba.axi4_stream.reset(buffer_cfg_c, nsl_data.cbor.cbor_tstr("cts"));
+              when '0' => rin.encoded <= nsl_amba.axi4_stream.reset(buffer_cfg_c, nsl_data.cbor.cbor_tstr(NONE_STR_C));
+              when '1' => rin.encoded <= nsl_amba.axi4_stream.reset(buffer_cfg_c, nsl_data.cbor.cbor_tstr(CTS_STR_C));
               when others => null;
             end case;
           when 3 =>
-            rin.encoded <= nsl_amba.axi4_stream.reset(buffer_cfg_c, nsl_data.cbor.cbor_tstr("parity"));
+            rin.encoded <= nsl_amba.axi4_stream.reset(buffer_cfg_c, nsl_data.cbor.cbor_tstr(PARITY_STR_C));
           when 4 =>
             case r.parity is
-              when nsl_uart.serdes.PARITY_NONE => rin.encoded <= nsl_amba.axi4_stream.reset(buffer_cfg_c, nsl_data.cbor.cbor_tstr("n"));
-              when nsl_uart.serdes.PARITY_EVEN => rin.encoded <= nsl_amba.axi4_stream.reset(buffer_cfg_c, nsl_data.cbor.cbor_tstr("e"));
-              when nsl_uart.serdes.PARITY_ODD  => rin.encoded <= nsl_amba.axi4_stream.reset(buffer_cfg_c, nsl_data.cbor.cbor_tstr("o"));
+              when nsl_uart.serdes.PARITY_NONE => rin.encoded <= nsl_amba.axi4_stream.reset(buffer_cfg_c, nsl_data.cbor.cbor_tstr(N_STR_C));
+              when nsl_uart.serdes.PARITY_EVEN => rin.encoded <= nsl_amba.axi4_stream.reset(buffer_cfg_c, nsl_data.cbor.cbor_tstr(E_STR_C));
+              when nsl_uart.serdes.PARITY_ODD  => rin.encoded <= nsl_amba.axi4_stream.reset(buffer_cfg_c, nsl_data.cbor.cbor_tstr(O_STR_C));
               when others => null;
             end case;
           when 5 =>
-            rin.encoded <= nsl_amba.axi4_stream.reset(buffer_cfg_c, nsl_data.cbor.cbor_tstr("baud-rate"));
+            rin.encoded <= nsl_amba.axi4_stream.reset(buffer_cfg_c, nsl_data.cbor.cbor_tstr(BAUD_RATE_STR_C));
           when 6 =>
             rin.encoded <= nsl_amba.axi4_stream.reset(buffer_cfg_c, nsl_data.cbor.cbor_number(divisor_to_baud(r.divisor)));
             rin.last <= true;
