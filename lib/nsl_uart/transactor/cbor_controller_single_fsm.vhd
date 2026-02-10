@@ -499,7 +499,7 @@ begin
 
     bnoc_tx_s.req.valid <= '0';
     bnoc_tx_s.req.data <= (others => '-');
-    bnoc_rx_s.ack.ready <= '1';
+    bnoc_rx_s.ack.ready <= nsl_logic.bool.to_logic(nsl_data.fifo.fifo_can_push(storage => r.fifo, fillness => r.count));
     
     case r.state is
       when ST_RESET =>
