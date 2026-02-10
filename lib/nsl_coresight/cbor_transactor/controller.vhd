@@ -29,7 +29,7 @@ entity controller is
 end entity;
 
 architecture rtl of controller is
-  constant cbr_hdr_max_size_c : natural := 9;
+  constant cbr_hdr_max_size_c : natural := 5;
   constant buffer_cfg_c       : nsl_amba.axi4_stream.buffer_config_t := nsl_amba.axi4_stream.buffer_config(axi_s_cfg_c, cbr_hdr_max_size_c);
 
   constant err_ok_c     : std_ulogic_vector(2 downto 0) := "001"; 
@@ -100,14 +100,15 @@ architecture rtl of controller is
     ST_RSP_BREAK_PREP,        -- Break code for indefinite length array.
     ST_RSP_BREAK_PUT,         -- Put break code
 
-    ST_CMD_CANCELLED          -- If a command is cancelled, flush input data
+    ST_CMD_CANCELLED,         -- If a command is cancelled, flush input data,
+
+    ST_ERROR_DRAIN
     );
 
   type regs_t is record
     state         : state_t;
 
     cmd           : std_ulogic_vector(7 downto 0);
-    cmd_sent      : std_ulogic_vector(7 downto 0);
     cycle         : natural range 0 to 3;
     data          : std_ulogic_vector(31 downto 0);
 
@@ -179,6 +180,7 @@ architecture rtl of controller is
     when ST_RSP_BREAK_PREP        => return "ST_RSP_BREAK_PREP";
     when ST_RSP_BREAK_PUT         => return "ST_RSP_BREAK_PUT";
     when ST_CMD_CANCELLED         => return "ST_CMD_CANCELLED";
+    when ST_ERROR_DRAIN           => return "ST_ERROR_DRAIN";
     end case;
   end;
   
@@ -283,7 +285,6 @@ architecture rtl of controller is
       when ST_ARRAY_GET =>
         rin.cmd_cancelled <= false;
         if cmd_i.valid = '1' then
-          -- nsl_simulation.logging.log_info("In parsing, ST_ARRAY_GET a byte");
           rin.parser <= nsl_data.cbor.feed(r.parser, cmd_i.data(0));
           if nsl_data.cbor.is_last( r.parser, cmd_i.data(0) ) then
             rin.state <= ST_ARRAY_ENTER;
@@ -293,7 +294,6 @@ architecture rtl of controller is
       when ST_ARRAY_ENTER =>
         if nsl_data.cbor.kind(r.parser) = nsl_data.cbor.KIND_ARRAY then
           if not r.parser.indefinite then
-            -- nsl_simulation.logging.log_info("r.command_count set to " & nsl_data.text.to_string(nsl_data.cbor.arg_int(r.parser)));
             rin.command_count <= nsl_data.cbor.arg_int(r.parser);
             rin.indefinite    <= false;
           else
@@ -302,16 +302,18 @@ architecture rtl of controller is
           rin.parser <= nsl_data.cbor.reset;
           rin.state  <= ST_RSP_ARRAY_HDR_PREP;
         else 
-           -- TODO ??
+          nsl_simulation.logging.log_warning("Expected CBOR array, draining frame");
+          rin.last  <= true;
+          rin.state <= ST_ERROR_DRAIN;
         end if; 
 
       when ST_CMD_GET =>
-          if cmd_i.valid = '1' then
+          if nsl_amba.axi4_stream.is_valid(axi_s_cfg_c, cmd_i) then
             rin.parser <= nsl_data.cbor.feed(r.parser, cmd_i.data(0));
             if nsl_data.cbor.is_last( r.parser, cmd_i.data(0) ) then
               rin.state <= ST_CMD_EXEC;
               if not r.indefinite and not r.inside_cmd then
-                rin.command_count <= (r.command_count - 1) mod 32;
+                rin.command_count <= r.command_count - 1;
               end if;
             end if;
           end if;
@@ -324,20 +326,24 @@ architecture rtl of controller is
           rin.tag        <= tag;
           rin.inside_cmd <= true;
           rin.state      <=  ST_CMD_GET;
-          if tag > 0 and tag < 8 then
+          if 0 <= tag and tag < 8 then
             -- SWD RW. tag indicates register
           elsif tag = 8 then
             -- SWD turnaround. next item is an int that indicates the number of
             -- cycles. sticky setting.
           elsif tag = 9 then
             -- bitbang. next item is a bstr with the data to bitbang
+          elsif tag = 10 then
+            -- wait for cycles. next item is a positive integer with the number
+            -- of cycles to wait for
           else
-            null;
+            nsl_simulation.logging.log_warning("Unhandled CBOR tag " & integer'image(tag) &" received, draining frame");
+            rin.last  <= true;
+            rin.state <= ST_ERROR_DRAIN;
           end if;
         elsif nsl_data.cbor.kind(r.parser) = nsl_data.cbor.KIND_POSITIVE then
           if not r.inside_cmd then
             -- SWD_RUN
-            -- nsl_simulation.logging.log_info("Received command to SWD_RUN, going to ST_RUN for " & nsl_data.text.to_string(nsl_data.cbor.arg_int(r.parser)) & " cycles");
             rin.inside_cmd <= false;
             rin.cycle_count <= nsl_data.cbor.arg_int(r.parser) - 1;
             if not r.cmd_cancelled then
@@ -363,8 +369,6 @@ architecture rtl of controller is
               rin.word_count <= nsl_data.cbor.arg_int(r.parser);
               rin.word_total <= nsl_data.cbor.arg_int(r.parser);
 
-              -- nsl_simulation.logging.log_info("r.word_total = r.word_count = " & nsl_data.text.to_string(nsl_data.cbor.arg_int(r.parser)) );
-
               rin.cycle_count <= 7;
               if not r.cmd_cancelled then
                 rin.state <= ST_RSP_READ_HDR_PREP;
@@ -373,28 +377,24 @@ architecture rtl of controller is
               end if;
               
             elsif r.tag = 8 then
-              -- nsl_simulation.logging.log_info("Updated turnaround value with received value");
               rin.turnaround <= nsl_data.cbor.arg_int(r.parser)-1;
               rin.inside_cmd <= false;
 
               rin.state <= ST_CMD_END;
             elsif r.tag = 10 then
-              -- nsl_simulation.logging.log_info("Updated cycles to wait
-              -- between operations with received value");
               rin.wait_cycles <= nsl_data.cbor.arg_int(r.parser)-1;
               rin.inside_cmd  <= false;
 
               rin.state <= ST_CMD_END;
             else
-              null;
+              nsl_simulation.logging.log_warning("Unhandled tag contect for positive number received, draining frame");
+              rin.last  <= true;
+              rin.state <= ST_ERROR_DRAIN;
             end if;
           end if;
         elsif nsl_data.cbor.kind(r.parser) = nsl_data.cbor.KIND_BSTR then
           if r.inside_cmd then
             if 0 <= r.tag and r.tag < 8 then
-              -- it's a write. the register to read is indicated by the tag
-              -- nsl_simulation.logging.log_info("Received command to write to a register");
-              -- nsl_simulation.logging.log_info("Will write " & nsl_data.text.to_string(nsl_data.cbor.arg_int(r.parser)) & " bytes");
               rin.is_read <= false;
               if r.tag < 4 then
                 rin.cmd <= swd_cmd(reg => r.tag, ap => false, read => false);
@@ -404,8 +404,6 @@ architecture rtl of controller is
               
               rin.word_count <= nsl_data.cbor.arg_int(r.parser)/4;
               rin.word_total <= nsl_data.cbor.arg_int(r.parser)/4;
-
-              -- nsl_simulation.logging.log_info("r.word_total = r.word_count = " & nsl_data.text.to_string(nsl_data.cbor.arg_int(r.parser)/4) );
               
               rin.par_in <= '0';
               rin.par_out <= '0';
@@ -427,6 +425,10 @@ architecture rtl of controller is
               else
                 rin.state <= ST_CMD_END;
               end if;
+            else
+              nsl_simulation.logging.log_warning("Unhandled tag contect for bytestring, draining frame");
+              rin.last  <= true;
+              rin.state <= ST_ERROR_DRAIN;
             end if;
           end if;
         elsif nsl_data.cbor.kind(r.parser) = nsl_data.cbor.KIND_TRUE then -- JTAG-to-SWD
@@ -466,9 +468,10 @@ architecture rtl of controller is
           rin.swd.dio.v <= r.cmd(0);
           rin.swd.dio.output <= '1';
         elsif swclk_rising then
+          rin.cmd <= r.cmd(0) & r.cmd(7 downto 1); -- Rotate, instead of just shift
+                                                   -- out, to preserve cmd for multi-word
           if r.cycle_count /= 0 then
             rin.cycle_count <= r.cycle_count - 1;
-            rin.cmd <= "-" & r.cmd(7 downto 1);
           else
             rin.state <= ST_CMD_TURNAROUND;
             rin.cycle_count <= r.turnaround;
@@ -570,9 +573,10 @@ architecture rtl of controller is
             rin.state <= ST_RSP_WRITE_STATUS_PREP;
             rin.cycle_count <= rin.wait_cycles;
           else
-              rin.cycle_count <= 7;
-              rin.cmd <= r.cmd_sent;
-              rin.state <= ST_CMD_SHIFT;
+              -- Multi-word write: do turnaround before next command
+              rin.cycle_count <= r.turnaround;
+              rin.par_out <= '0';  -- Reset parity for next word
+              rin.state <= ST_DATA_TURNAROUND;
           end if;
         end if;
 
@@ -608,8 +612,14 @@ architecture rtl of controller is
           if r.cycle_count /= 0 then
             rin.cycle_count <= r.cycle_count - 1;
           else
-            rin.state <= ST_RUN;
-            rin.cycle_count <= r.wait_cycles;
+            if r.word_count /= 0 then
+              -- Multi-word read/write: send next command
+              rin.cycle_count <= 7;
+              rin.state <= ST_CMD_SHIFT;
+            else
+              rin.state <= ST_RUN;
+              rin.cycle_count <= r.wait_cycles;
+            end if;
           end if;
         end if;
 
@@ -656,7 +666,14 @@ architecture rtl of controller is
       when ST_DATA_PUT =>
         if nsl_amba.axi4_stream.is_ready(axi_s_cfg_c, rsp_i) then
           if nsl_amba.axi4_stream.is_last(buffer_cfg_c, r.encoded) then
-            rin.state <= ST_RSP_READ_STATUS_PREP;
+            rin.word_count <= r.word_count - 1;  -- Decrement word count
+            if r.word_count = 1 then  -- This was the last word
+              rin.state <= ST_RSP_READ_STATUS_PREP;
+            else  -- More words to read
+              rin.par_in <= '0';  -- Reset parity for next word
+              rin.cycle_count <= r.turnaround;
+              rin.state <= ST_DATA_TURNAROUND;
+            end if;
           end if;
           rin.encoded <= nsl_amba.axi4_stream.shift(buffer_cfg_c, r.encoded);
         end if;
@@ -689,9 +706,6 @@ architecture rtl of controller is
         end if;
 
       when ST_RSP_WRITE_STATUS_PREP =>
-        -- nsl_simulation.logging.log_info("r.word_total - r.word_count = " & nsl_data.text.to_string(r.word_total - r.word_count) );
-        -- nsl_simulation.logging.log_info("r.word_total = " & nsl_data.text.to_string(r.word_total) );
-        -- nsl_simulation.logging.log_info("r.word_count = " & nsl_data.text.to_string(r.word_count) );
         status(3) := r.par_in;
         status(2 downto 0) := r.ack;
         rin.encoded <= nsl_amba.axi4_stream.reset(buffer_cfg_c,
@@ -714,10 +728,7 @@ architecture rtl of controller is
         end if;
     
       when ST_RSP_READ_STATUS_PREP =>
-        -- nsl_simulation.logging.log_info("r.word_total - r.word_count = " & nsl_data.text.to_string(r.word_total - r.word_count) );
-        -- nsl_simulation.logging.log_info("r.word_total = " & nsl_data.text.to_string(r.word_total) );
-        -- nsl_simulation.logging.log_info("r.word_count = " & nsl_data.text.to_string(r.word_count) );
-        if is_x(r.par_in) then -- TODO is this correct?
+        if is_x(r.par_in) then -- TODO remove? handles problems in sim
           status(3) := '0';
         else
           status(3) := r.par_in;
@@ -789,6 +800,17 @@ architecture rtl of controller is
             rin.cycle <= r.cycle - 1;
           end if;
         end if;
+
+      when ST_ERROR_DRAIN =>
+          if nsl_amba.axi4_stream.is_valid(axi_s_cfg_c, cmd_i) then
+            if nsl_amba.axi4_stream.is_last(axi_s_cfg_c, cmd_i) then
+              if r.last then
+                rin.state <= ST_RESET;
+              else
+                rin.state <= ST_RSP_BREAK_PREP;
+              end if;
+            end if;
+          end if;
       
       when others =>
         null;
@@ -806,16 +828,7 @@ architecture rtl of controller is
     case r.state is
       when ST_RESET | ST_ARRAY_ENTER | ST_CMD_EXEC | ST_CMD_END =>
         
-      when ST_ARRAY_GET =>
-        cmd_o <= nsl_amba.axi4_stream.accept(axi_s_cfg_c, true);
-
-      when ST_CMD_GET =>
-        cmd_o <= nsl_amba.axi4_stream.accept(axi_s_cfg_c, true);
-
-      when ST_DATA_GET => 
-        cmd_o <= nsl_amba.axi4_stream.accept(axi_s_cfg_c, true);
-
-      when ST_CMD_CANCELLED =>
+      when ST_ARRAY_GET | ST_CMD_GET | ST_DATA_GET | ST_ERROR_DRAIN | ST_CMD_CANCELLED =>
         cmd_o <= nsl_amba.axi4_stream.accept(axi_s_cfg_c, true);
                 
       when ST_CMD_SHIFT | ST_CMD_TURNAROUND | ST_ACK_SHIFT | ST_ACK_TURNAROUND | ST_DATA_SHIFT_OUT | ST_PARITY_SHIFT_OUT | ST_DATA_SHIFT_IN | ST_PARITY_SHIFT_IN | ST_DATA_TURNAROUND | ST_RUN | ST_BITBANG =>

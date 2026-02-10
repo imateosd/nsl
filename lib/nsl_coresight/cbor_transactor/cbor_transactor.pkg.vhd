@@ -40,13 +40,14 @@ package cbor_transactor is
 
   -- The responses are encoded in an array:
   -- responses = [* response]
-  -- response = swd-write-response / swd-read-response   ; response data stream, only for reads
+  -- response = swd-write-response / swd-read-response ; response stream only for reads and writes.
+  --                                                   ; If no read or write was performed, an empty array is returned
   
   -- swd-write-response = [offset , swd-status ] 
   -- swd-read-response = [bstr , offset, swd-status]
   
-  -- offset = uint ; word index where the failure is, starting at 0
-  -- swd-status = 0..15 ; b0 to b2 is the flags swd. b3 is parity failure.
+  -- offset = uint ; word index where the failure is, starting at 0. If there are not failures, it will contain the number of read or written words
+  -- swd-status = 0..15 ; b0 to b2 is the swd ack response. b3 indicates parity failure.
 
   -- If there is an error, the command stream will stop being executed from the point where the error happens. The response stream will not have responses for all the commands in the command stream that expect a response (write and read).
   

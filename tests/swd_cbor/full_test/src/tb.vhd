@@ -238,8 +238,8 @@ begin
                                               sev         => warning);
     nsl_simulation.logging.log_test_result("JTAG-to-SWD sequence", check_status, pass_count, fail_count);
 
-    wait for 100 us;
-
+    wait for 50 ns;
+    
     -- Test 2: Run command (50 cycles) for line reset
     -- Command: [50] = 81 18 32
     -- Response: empty (no response for run)
@@ -253,25 +253,24 @@ begin
                                               sev         => warning);
     nsl_simulation.logging.log_test_result("Run 50 cycles", check_status, pass_count, fail_count);
 
-    wait for 100 us;
-
+    wait for 50 ns;
+    
     -- Test 3: Read DP IDR (reg0, 1 word)
     -- Command: [#6.0(1)] = 81 c0 01
-    -- Response: [array(3): [indef_bstr[bstr(4 bytes IDR)], offset=0, status=1(OK)]]
+    -- Response: [array(3): [indef_bstr[bstr(4 bytes IDR)], read_words=1, status=1(OK)]]
     -- DP IDR = 0x04567e11
-    -- Format: 9f 83 5f 44 <4 bytes> ff 18 00 01 ff
     nsl_amba.axi4_stream.frame_queue_check_io(root_master => cmd_q,
                                               root_slave  => rsp_q,
                                               data1       => nsl_data.bytestream.from_suv(x"81c001"),
-                                              data2       => nsl_data.bytestream.from_suv(x"9f835f4404567e11ff180001ff"),
+                                              data2       => nsl_data.bytestream.from_suv(x"9f835f4404567e11ff180101ff"),
                                               check_status => check_status,
                                               dt          => clock_period,
                                               timeout     => clock_period*2000000,
                                               sev         => warning);
     nsl_simulation.logging.log_test_result("Read DP IDR (reg0)", check_status, pass_count, fail_count);
 
-    wait for 100 us;
-
+    wait for 50 ns;
+    
     -- Test 4: Full SWD initialization sequence
     -- Combined: turnaround(1), run(10), write CTRL/STAT, run(8), write SELECT, run(8)
     -- 86 = array(6)
@@ -281,7 +280,7 @@ begin
     -- 08 = run(8)
     -- c2 44 f0 00 00 00 = DP reg2 write (SELECT = 0x000000F0 - AP0 bank F)
     -- 08 = run(8)
-    -- Responses: write response x2 = 82 18 01 01, 82 18 01 01 (offset=1, status=OK)
+    -- Responses: write response x2 = 82 18 01 01, 82 18 01 01 (written_words=1, status=OK)
     nsl_amba.axi4_stream.frame_queue_check_io(root_master => cmd_q,
                                               root_slave  => rsp_q,
                                               data1       => nsl_data.bytestream.from_suv(x"86c8010ac1440000005008c244f000000008"),
@@ -292,8 +291,8 @@ begin
                                               sev         => warning);
     nsl_simulation.logging.log_test_result("SWD init (CTRL/STAT + SELECT)", check_status, pass_count, fail_count);
 
-    wait for 100 us;
-
+    wait for 50 ns;
+    
     -- Test 5: Trigger AP read to load AP IDR into RDBUFF
     -- AP reads are posted - first read returns stale data, result goes to RDBUFF
     -- Command: [run(8), #6.7(1)] = 82 08 c7 01
@@ -309,40 +308,40 @@ begin
     check_status := true;  -- Consider pass since we just need to trigger the AP read
     nsl_simulation.logging.log_test_result("AP read trigger (stale response consumed)", check_status, pass_count, fail_count);
 
-    wait for 100 us;
-
+    wait for 50 ns;
+    
     -- Test 6: Read DP CTRL/STAT (reg1) - verify debug power enabled
     -- Command: [#6.1(1)] = 81 c1 01
-    -- Response: [array(3): [indef_bstr[bstr(4 bytes)], offset=0, status=1(OK)]]
+    -- Response: [array(3): [indef_bstr[bstr(4 bytes)], read_words=1, status=1(OK)]]
     -- Note: Returns 0xF0000000 (ctrl bits with ack bits set) as 00 00 00 f0 (LE)
     nsl_amba.axi4_stream.frame_queue_check_io(root_master => cmd_q,
                                               root_slave  => rsp_q,
                                               data1       => nsl_data.bytestream.from_suv(x"81c101"),
-                                              data2       => nsl_data.bytestream.from_suv(x"9f835f44f0000000ff180001ff"),
+                                              data2       => nsl_data.bytestream.from_suv(x"9f835f44f0000000ff180101ff"),
                                               check_status => check_status,
                                               dt          => clock_period,
                                               timeout     => clock_period*5000000,
                                               sev         => warning);
     nsl_simulation.logging.log_test_result("Read DP CTRL/STAT (reg1)", check_status, pass_count, fail_count);
-
-    wait for 100 us;
-
+    
+    wait for 50 ns;
+    
     -- Test 7: Read DP RDBUFF (reg3) - returns last AP read result (AP IDR)
     -- Command: [#6.3(1)] = 81 c3 01
-    -- Response: [array(3): [indef_bstr[bstr(4 bytes)], offset=0, status=1(OK)]]
+    -- Response: [array(3): [indef_bstr[bstr(4 bytes)], read_words=1, status=1(OK)]]
     -- AP IDR = 0x01234e11 returned as: 01 23 4e 11
     nsl_amba.axi4_stream.frame_queue_check_io(root_master => cmd_q,
                                               root_slave  => rsp_q,
                                               data1       => nsl_data.bytestream.from_suv(x"81c301"),
-                                              data2       => nsl_data.bytestream.from_suv(x"9f835f4401234e11ff180001ff"),
+                                              data2       => nsl_data.bytestream.from_suv(x"9f835f4401234e11ff180101ff"),
                                               check_status => check_status,
                                               dt          => clock_period,
                                               timeout     => clock_period*5000000,
                                               sev         => warning);
     nsl_simulation.logging.log_test_result("Read DP RDBUFF (reg3)", check_status, pass_count, fail_count);
-
-    wait for 100 us;
-
+    
+    wait for 50 ns;
+    
     -- Test 8: Bitbang custom sequence (8 bytes of 0xFF = 64 high clocks for line reset)
     -- Command: [#6.9(bstr(8 bytes))] = 81 c9 48 ff ff ff ff ff ff ff ff
     -- Response: empty (no response for bitbang)
@@ -356,8 +355,8 @@ begin
                                               sev         => warning);
     nsl_simulation.logging.log_test_result("Bitbang line reset", check_status, pass_count, fail_count);
 
-    wait for 100 us;
-
+    wait for 50 ns;
+    
     -- Test 9: Set turnaround to 2 cycles (default)
     -- Command: [#6.8(2)] = 81 c8 02
     -- Response: empty (sticky setting)
@@ -371,8 +370,10 @@ begin
                                               sev         => warning);
     nsl_simulation.logging.log_test_result("Set turnaround (2 cycles)", check_status, pass_count, fail_count);
 
-    wait for 100 us;
+    wait for 50 ns;
 
+    -- The bitbang tests can be checked in the waveform, here I only check that the response follows the spec
+    
     -- Test 10: Set turnaround to 3 cycles
     -- Command: [#6.8(3)] = 81 c8 03
     -- Response: empty (sticky setting)
@@ -386,6 +387,97 @@ begin
                                               sev         => warning);
     nsl_simulation.logging.log_test_result("Set turnaround (3 cycles)", check_status, pass_count, fail_count);
 
+    wait for 50 ns;
+    
+    -- Test 11: Short bitbang (1 byte = 8 bits with alternating pattern)
+    -- Command: [#6.9(bstr(1 byte))] = 81 c9 41 aa
+    -- Response: empty (no response for bitbang)
+    nsl_amba.axi4_stream.frame_queue_check_io(root_master => cmd_q,
+                                              root_slave  => rsp_q,
+                                              data1       => nsl_data.bytestream.from_suv(x"81c941aa"),
+                                              data2       => nsl_data.bytestream.from_suv(x"9fff"),
+                                              check_status => check_status,
+                                              dt          => clock_period,
+                                              timeout     => clock_period*2000000,
+                                              sev         => warning);
+    nsl_simulation.logging.log_test_result("Bitbang short (1 byte)", check_status, pass_count, fail_count);
+
+    wait for 50 ns;
+    
+    -- Test 12: Bitbang with alternating pattern (4 bytes: AA 55 AA 55)
+    -- Command: [#6.9(bstr(4 bytes))] = 81 c9 44 aa 55 aa 55
+    -- Response: empty (no response for bitbang)
+    nsl_amba.axi4_stream.frame_queue_check_io(root_master => cmd_q,
+                                              root_slave  => rsp_q,
+                                              data1       => nsl_data.bytestream.from_suv(x"81c944aa55aa55"),
+                                              data2       => nsl_data.bytestream.from_suv(x"9fff"),
+                                              check_status => check_status,
+                                              dt          => clock_period,
+                                              timeout     => clock_period*2000000,
+                                              sev         => warning);
+    nsl_simulation.logging.log_test_result("Bitbang alternating pattern (4 bytes)", check_status, pass_count, fail_count);
+
+    wait for 50 ns;
+    
+    -- Test 13: Bitbang combined with run in same array
+    -- Command: [run(8), #6.9(bstr(2 bytes)), run(8)] = 83 08 c9 42 12 34 08
+    -- Response: empty (no response for run or bitbang)
+    nsl_amba.axi4_stream.frame_queue_check_io(root_master => cmd_q,
+                                              root_slave  => rsp_q,
+                                              data1       => nsl_data.bytestream.from_suv(x"8308c942123408"),
+                                              data2       => nsl_data.bytestream.from_suv(x"9fff"),
+                                              check_status => check_status,
+                                              dt          => clock_period,
+                                              timeout     => clock_period*2000000,
+                                              sev         => warning);
+    nsl_simulation.logging.log_test_result("Bitbang combined with run commands", check_status, pass_count, fail_count);
+
+    wait for 50 ns;
+    
+    -- Test 14: Longer bitbang sequence (16 bytes for a complete JTAG-to-SWD + line reset)
+    -- This sends: 0xFF x 7 (56 high bits) + 0x9E (JTAG-to-SWD) + 0xFF x 7 (56 high bits) + 0x00 (idle)
+    -- Command: [#6.9(bstr(16 bytes))] = 81 c9 50 + 16 bytes
+    nsl_amba.axi4_stream.frame_queue_check_io(root_master => cmd_q,
+                                              root_slave  => rsp_q,
+                                              data1       => nsl_data.bytestream.from_suv(x"81c950ffffffffffffff9effffffffffffff00"),
+                                              data2       => nsl_data.bytestream.from_suv(x"9fff"),
+                                              check_status => check_status,
+                                              dt          => clock_period,
+                                              timeout     => clock_period*5000000,
+                                              sev         => warning);
+    nsl_simulation.logging.log_test_result("Bitbang long sequence (16 bytes)", check_status, pass_count, fail_count);
+
+    wait for 50 ns;
+    
+    -- Test 15: Multi-word write (8 bytes = 2 words)
+    -- Command: [turnaround(1), run(8), #6.1(bstr(8 bytes))]
+    -- Response: [2, 1] = 2 words written, status OK
+    nsl_amba.axi4_stream.frame_queue_check_io(root_master => cmd_q,
+                                              root_slave  => rsp_q,
+                                              data1       => nsl_data.bytestream.from_suv(x"83c80108c1480000005000000050"),
+                                              data2       => nsl_data.bytestream.from_suv(x"9f82180201ff"),
+                                              check_status => check_status,
+                                              dt          => clock_period,
+                                              timeout     => clock_period*5000000,
+                                              sev         => warning);
+    nsl_simulation.logging.log_test_result("Multi-word write (2 words)", check_status, pass_count, fail_count);
+   
+    wait for 50 ns;
+    
+    -- Test 16: Multi-word read (8 bytes = 2 words)
+    -- Command: [turnaround(1), run(8), #6.1(2)] = read DP reg1 (CTRL/STAT) 2 words
+    -- Response: array(3)[indef_bstr[bstr(4)+data1, bstr(4)+data2], break, word_count=2, status=OK]
+    -- SWD stub returns f0 00 00 00 for CTRL/STAT
+    nsl_amba.axi4_stream.frame_queue_check_io(root_master => cmd_q,
+                                              root_slave  => rsp_q,
+                                              data1       => nsl_data.bytestream.from_suv(x"83c80108c102"),
+                                              data2       => nsl_data.bytestream.from_suv(x"9f835f44f000000044f0000000ff180201ff"),
+                                              check_status => check_status,
+                                              dt          => clock_period,
+                                              timeout     => clock_period*5000000,
+                                              sev         => warning);
+    nsl_simulation.logging.log_test_result("Multi-word read (2 words)", check_status, pass_count, fail_count);
+        
     wait for 1 ms;
 
     nsl_simulation.logging.log_test_suite_summary("SWD CBOR TRANSACTOR TESTS", pass_count, fail_count);
