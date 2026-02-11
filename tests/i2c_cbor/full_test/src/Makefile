@@ -1,4 +1,5 @@
 vhdl-sources += clocked_slave_nack.vhd
+vhdl-sources += clocked_slave_10bit.vhd
 vhdl-sources += tb.vhd
 deps += nsl_i2c.cbor_transactor
 deps += nsl_i2c.clocked

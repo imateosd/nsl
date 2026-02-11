@@ -18,7 +18,7 @@ architecture arch of tb is
   signal s_rsp_pre       : nsl_amba.axi4_stream.bus_t;
   
   signal s_i2c           : nsl_i2c.i2c.i2c_i;
-  signal s_i2c_slave1, s_i2c_slave2, s_i2c_slave3, s_i2c_slave4, s_i2c_master : nsl_i2c.i2c.i2c_o;
+  signal s_i2c_slave1, s_i2c_slave2, s_i2c_slave3, s_i2c_slave4, s_i2c_slave5, s_i2c_master : nsl_i2c.i2c.i2c_o;
 
   signal s_clk, s_resetn : std_ulogic;
   signal s_done : std_ulogic_vector(0 to 0);
@@ -33,52 +33,20 @@ architecture arch of tb is
   -- Test control signals
   signal test_timeout : boolean := false;
   signal test_complete : boolean := false;
-  
-  -- Operations
-  -- Write to 0x50, 0x12 and 0x34          -> [[0x50, h'1234'], null]
-  -- -> 82821850421234f6
     
-  -- Read from 0x50, 2 bytes               -> [[0x50, 2], null]
-  -- -> 8282185002f6
-    
-  -- Write 0x12 to memory address 0x00 and 0x34 to memory address 0x01
-  -- -> [[0x40, h'00001234'], null]
-  -- -> 828218404400001234f6
-    
-  -- Read 1 byte from memory address 0x00 and 1 from 0x01
-  -- -> [[0x40, h'0000'], [0x40, 1], null, [0x40, h'0001'], [64, 1], null]
-  -- -> 8682184042000082184001f682184042000182184001f6
-    
-  -- Read 3 bytes from memory address 0x00 -> [[64, h'0000'], [64, 3], null]
-  -- -> 8382184042000082184003f6
-    
-  -- Write to not present address 0x60     -> [[0x60, h'12'], null]
-  -- -> 828218604112f6
-  -- -> Should return i2c-addr-nack
-    
-  -- Write to slave_nack at address 0x30   -> [[0x30, h'1234'], null]
-  -- -> 82821830421234f6
-  -- -> Won't acknowledge data bytes. Should return i2c-data-nack
-    
-  -- Try to read from address 0x70 (not present) with a timeout of 10 us -> [1([10, 0x70, 2]), null]
-  -- -> 0x82c1830a187002f6
-  -- -> Should return i2c-addr-nack
-    
-  -- Try to read from address 0x20 with a timeout of 10 us -> [1([10, 0x20, 1]), null]
-  -- -> 0x82c1830a182002f6
-  
 begin
 
   resolver: nsl_i2c.i2c.i2c_resolver
     generic map(
-      port_count => 5
+      port_count => 6
       )
     port map(
       bus_i(0) => s_i2c_slave1,
       bus_i(1) => s_i2c_slave2,
       bus_i(2) => s_i2c_slave3,
       bus_i(3) => s_i2c_slave4,
-      bus_i(4) => s_i2c_master,
+      bus_i(4) => s_i2c_slave5,
+      bus_i(5) => s_i2c_master,
       bus_o => s_i2c
       );
 
@@ -109,7 +77,32 @@ begin
       w_ready_i => '1'
     );
 
-  
+  i2c_slave_10b: entity work.clocked_slave_10bit
+    generic map(
+      clock_freq_c => 10e7
+    )
+    port map(
+      reset_n_i => s_resetn,
+      clock_i   => s_clk,
+
+      address_i => "0100010000", -- 0x110 (10-bit address)
+
+      i2c_i    => s_i2c,
+      i2c_o    => s_i2c_slave5,
+
+      start_o  => open,
+      stop_o   => open,
+      selected_o => open,
+
+      r_data_i  => X"CC",  -- Different response than 7-bit slave
+      r_ready_o => open,
+      r_valid_i => '1',
+
+      w_data_o  => open,
+      w_valid_o => open,
+      w_ready_i => '1'
+    );
+
   i2c_mem: nsl_i2c.clocked.clocked_memory
     generic map(
       address => "1000000", -- 0x40
@@ -497,6 +490,62 @@ begin
       sev         => warning
     );
     nsl_simulation.logging.log_test_result("Medium read operation (4 bytes)", check_status, pass_count, fail_count);
+
+    -- Test 17: 10-bit address write (slave at 0x110)
+    -- Command: [[0x110, h'12'], null]
+    nsl_amba.axi4_stream.frame_queue_check_io(
+      root_master => cmd_q,
+      root_slave  => rsp_q,
+      data1       => nsl_data.bytestream.from_suv(x"82821901104112f6"),
+      data2       => nsl_data.bytestream.from_suv(x"9ff6ff"),
+      check_status => check_status,
+      dt          => clock_period,
+      timeout     => clock_period*200000,
+      sev         => warning
+    );
+    nsl_simulation.logging.log_test_result("10-bit address write (0x110)", check_status, pass_count, fail_count);
+
+    -- Test 18: 10-bit address read (slave at 0x110, returns 0xCC)
+    -- Command: [[0x110, 2], null]
+    nsl_amba.axi4_stream.frame_queue_check_io(
+      root_master => cmd_q,
+      root_slave  => rsp_q,
+      data1       => nsl_data.bytestream.from_suv(x"828219011002f6"),
+      data2       => nsl_data.bytestream.from_suv(x"9f590002ccccff"),
+      check_status => check_status,
+      dt          => clock_period,
+      timeout     => clock_period*200000,
+      sev         => warning
+    );
+    nsl_simulation.logging.log_test_result("10-bit address read (0x110)", check_status, pass_count, fail_count);
+
+    -- Test 19: 10-bit address at boundary (0x80 = first 10-bit address)
+    -- Command: [[0x80, h'ab'], null]
+    nsl_amba.axi4_stream.frame_queue_check_io(
+      root_master => cmd_q,
+      root_slave  => rsp_q,
+      data1       => nsl_data.bytestream.from_suv(x"82821880" & x"41ab" & x"f6"),
+      data2       => nsl_data.bytestream.from_suv(x"9ff4ff"),
+      check_status => check_status,
+      dt          => clock_period,
+      timeout     => clock_period*200000,
+      sev         => warning
+    );
+    nsl_simulation.logging.log_test_result("10-bit address boundary (0x80, expect NACK)", check_status, pass_count, fail_count);
+
+    -- Test 20: Maximum 10-bit address (0x3FF)
+    -- Command: [[0x3FF, 1], null]
+    nsl_amba.axi4_stream.frame_queue_check_io(
+      root_master => cmd_q,
+      root_slave  => rsp_q,
+      data1       => nsl_data.bytestream.from_suv(x"828219" & x"03FF" & x"01f6"),
+      data2       => nsl_data.bytestream.from_suv(x"9ff4ff"),
+      check_status => check_status,
+      dt          => clock_period,
+      timeout     => clock_period*200000,
+      sev         => warning
+    );
+    nsl_simulation.logging.log_test_result("10-bit address max (0x3FF, expect NACK)", check_status, pass_count, fail_count);
 
     wait for 1000 ns;
 
