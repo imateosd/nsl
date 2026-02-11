@@ -32,7 +32,8 @@ architecture tb of tb2 is
   
   -- DUT ports - FX2 interface
   signal to_fx2 : nsl_cypress.ez_usb_fx2.fx2_i;
-  signal from_fx2 : nsl_cypress.ez_usb_fx2.fx2_o;
+  -- signal from_fx2 : nsl_cypress.ez_usb_fx2.fx2_o;
+  signal from_fx2 : nsl_cypress.ez_usb_fx2.fx2_flags_o;
   
   -- Test control
   signal test_done : boolean := false;
@@ -69,11 +70,13 @@ begin
   end process;
   
   -- DUT instantiation
-  dut: entity nsl_cypress.fx2_controller
+  dut: nsl_cypress.ez_usb_fx2.fx2_controller_fixed
     generic map(
       axi_cfg_c => axi_cfg_c,
       rx_ep_c => nsl_cypress.ez_usb_fx2.FX2_EP2,
-      tx_ep_c => nsl_cypress.ez_usb_fx2.FX2_EP6
+      tx_ep_c => nsl_cypress.ez_usb_fx2.FX2_EP6,
+      rx_empty_flag_c => nsl_cypress.ez_usb_fx2.FX2_FLAGA,
+      tx_full_flag_c  => nsl_cypress.ez_usb_fx2.FX2_FLAGB
     )
     port map(
       clock_i => clock,
@@ -99,8 +102,8 @@ begin
     fx2_rx_count := 0; 
     
     -- Initialize FX2 outputs
-    from_fx2.full_n <= '1';  -- TX FIFO not full
-    from_fx2.empty_n <= '0'; -- RX FIFO empty
+    from_fx2.flag_b <= '1';  -- TX FIFO not full
+    from_fx2.flag_a <= '0';  -- RX FIFO empty
     from_fx2.data <= (others => '0');
     
     wait until reset_n = '1';
@@ -140,17 +143,17 @@ begin
       -- Update FX2 status signals
       -- TX FIFO full when it has more than 512 bytes (simulated)
       if fx2_tx_count > 512 then
-        from_fx2.full_n <= '0';
+        from_fx2.flag_b <= '0';
       else
-        from_fx2.full_n <= '1';
+        from_fx2.flag_b <= '1';
       end if;
       
       -- RX FIFO empty status
       if fx2_rx_count = 0 then
-        from_fx2.empty_n <= '0';
+        from_fx2.flag_a <= '0';
         from_fx2.data <= (others => '0');
       else
-        from_fx2.empty_n <= '1';
+        from_fx2.flag_a <= '1';
         -- Peek at next byte without removing it
         if rx_fifo /= null and rx_fifo'length > 0 then
           from_fx2.data <= rx_fifo(rx_fifo'left);
