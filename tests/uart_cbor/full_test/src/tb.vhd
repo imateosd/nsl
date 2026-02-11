@@ -73,7 +73,7 @@ begin
     variable check_status : boolean := false;
     variable pass_count, fail_count : integer := 0;
   begin
-    s_uart.cts <= '0';
+    s_uart.cts <= '1';  -- CTS active = clear to send
 
     nsl_amba.axi4_stream.frame_queue_init(cmd_q);
     nsl_amba.axi4_stream.frame_queue_init(rsp_q);
