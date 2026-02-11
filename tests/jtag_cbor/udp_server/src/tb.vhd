@@ -112,13 +112,14 @@ begin
 
   dut: nsl_jtag.cbor_transactor.controller
   generic map(
-    system_clock_c => 10e6,
+    clock_i_hz_c   => 10e7,
     axi_s_cfg_c    => cfg_c
     )
   port map(
     clock_i  =>  s_clk,
     reset_n_i => s_resetn,
 
+    tick_i_hz => 10e7/to_integer(tick_divisor),
     tick_i => tick_s,
     
     cmd_i => s_cmd.m,
