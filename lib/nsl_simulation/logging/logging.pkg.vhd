@@ -24,6 +24,17 @@ package logging is
   
   function to_string(level : log_level_t) return string;
 
+  function ansi_escape(command : character;
+                       arg0 : integer := - 1;
+                       arg1 : integer := - 1;
+                       arg2 : integer := - 1;
+                       arg3 : integer := - 1;
+                       arg4 : integer := - 1
+  ) return string;
+
+  function ansi_color(color : log_color_t;
+                      arg1  : integer := - 1) return string;
+
   procedure log(level : log_level_t; message : string);
   
   procedure log(level : log_level_t; message : string; color: log_color_t);
@@ -77,28 +88,52 @@ package body logging is
     end if;
   end procedure;
 
+  function ansi_escape(command : character;
+                       arg0 : integer := - 1;
+                       arg1 : integer := - 1;
+                       arg2 : integer := - 1;
+                       arg3 : integer := - 1;
+                       arg4 : integer := - 1) return string
+    is
+  begin
+
+    if arg0 =- 1 then
+      return ESC & "[" & command & "";
+    end if;
+    if arg1 =- 1 then
+      return ESC & "[" & nsl_data.text.to_string(arg0) & command;
+    end if;
+    if arg2 =- 1 then
+      return ESC & "[" & nsl_data.text.to_string(arg0) & ";" & nsl_data.text.to_string(arg1) & command;
+    end if;
+    if arg3 =- 1 then
+      return ESC & "[" & nsl_data.text.to_string(arg0) & ";" & nsl_data.text.to_string(arg1) & ";" & nsl_data.text.to_string(arg2) & command;
+    end if;
+    if arg4 =- 1 then
+      return ESC & "[" & nsl_data.text.to_string(arg0) & ";" & nsl_data.text.to_string(arg1) & ";" & nsl_data.text.to_string(arg2) & ";" & nsl_data.text.to_string(arg3) & command;
+    else
+      return ESC & "[" & nsl_data.text.to_string(arg0) & ";" & nsl_data.text.to_string(arg1) & ";" & nsl_data.text.to_string(arg2) & ";" & nsl_data.text.to_string(arg3) & ";" & nsl_data.text.to_string(arg4) & command;
+    end if;
+  end;
+
+  function ansi_color(color : log_color_t;
+                      arg1  : integer := - 1) return string
+  is
+  begin
+    return ansi_escape('m', 30 + log_color_t'pos(color), arg1);
+  end;
+
   procedure log(level : log_level_t; message : string; color: log_color_t) is
   begin
-      case color is
-        when LOG_COLOR_BLACK =>
-          nsl_simulation.logging.log(level => level, message => ESC & "[30m" & message & ESC & "[0m" );
-        when LOG_COLOR_RED =>
-          nsl_simulation.logging.log(level => level, message => ESC & "[31m" & message & ESC & "[0m" );
-        when LOG_COLOR_GREEN =>
-          nsl_simulation.logging.log(level => level, message => ESC & "[32m" & message & ESC & "[0m" );
-        when LOG_COLOR_YELLOW =>
-          nsl_simulation.logging.log(level => level, message => ESC & "[33m" & message & ESC & "[0m" );
-        when LOG_COLOR_BLUE =>
-          nsl_simulation.logging.log(level => level, message => ESC & "[34m" & message & ESC & "[0m" );
-        when LOG_COLOR_MAGENTA =>
-          nsl_simulation.logging.log(level => level, message => ESC & "[35m" & message & ESC & "[0m" );
-        when LOG_COLOR_CYAN =>
-          nsl_simulation.logging.log(level => level, message => ESC & "[36m" & message & ESC & "[0m" );
-        when LOG_COLOR_WHITE =>
-          nsl_simulation.logging.log(level => level, message => ESC & "[37m" & message & ESC & "[0m" );
-      end case;
-    end procedure;
-  
+    if level = LOG_LEVEL_FATAL then
+      nsl_simulation.logging.log(level => level,
+                                 message => string'(ansi_color(color, 1)) & message & string'(ansi_escape('m', 0)));
+    else
+      nsl_simulation.logging.log(level => level,
+                                 message => string'(ansi_color(color)) & message & string'(ansi_escape('m', 0)));
+    end if;
+  end procedure;
+
   procedure log_debug(message : string) is
   begin
     log(LOG_LEVEL_DEBUG, message, LOG_COLOR_WHITE);
