@@ -11,8 +11,8 @@ use nsl_data.cbor.all;
 
 entity controller is
     generic(
-        clock_i_hz_c    : natural;
-        target_scl_hz_c : natural := 400000;
+        clock_i_hz_c    : natural range 0 to 100000000;
+        target_scl_hz_c : natural range 0 to 400000 := 400000;
         axi_s_cfg_c     : nsl_amba.axi4_stream.config_t
     );
     port(
@@ -31,8 +31,8 @@ end entity;
 
 architecture beh of controller is
 
-    constant cbr_hdr_max_size_c   : natural := 9;
-    constant buffer_cfg_c         : nsl_amba.axi4_stream.buffer_config_t := nsl_amba.axi4_stream.buffer_config(axi_s_cfg_c, cbr_hdr_max_size_c);
+    constant cbr_hdr_max_size_c    : natural := 4;
+    constant buffer_cfg_c          : nsl_amba.axi4_stream.buffer_config_t := nsl_amba.axi4_stream.buffer_config(axi_s_cfg_c, cbr_hdr_max_size_c);
     constant clock_cycles_per_us_c : natural := clock_i_hz_c / 1000000;
 
   
@@ -96,18 +96,32 @@ architecture beh of controller is
         ST_RSP_BREAK_PUT,
 
         ST_IO_FLUSH_GET,
-        ST_IO_FLUSH_PUT        
+        ST_IO_FLUSH_PUT,
+        ST_ERROR_DRAIN,
+
+        -- 10-bit addressing: second address byte
+        ST_ADDR2_RUN,
+        ST_ADDR2_DATA,
+        ST_ADDR2_ACK,
+
+        -- 10-bit read: repeated START and read-direction address
+        ST_RESTART,
+        ST_RESTART_WAIT,
+        ST_ADDR_RD_RUN,
+        ST_ADDR_RD_DATA,
+        ST_ADDR_RD_ACK
     );
 
     type regs_t is record
         state         : state_t;
         owned         : std_ulogic;
         addr          : std_ulogic_vector(9 downto 0);
+        rw            : std_ulogic;  -- '0' = write, '1' = read
         data          : std_ulogic_vector(7 downto 0);
         
-        word_count    : natural range 0 to 1023;
-        word_total    : natural range 0 to 1023;
-        command_count : natural range 0 to 1023;
+        word_count    : natural range 0 to 255;
+        word_total    : natural range 0 to 255;
+        command_count : natural range 0 to 255;
         
         parser        : nsl_data.cbor.parser_t;
         indefinite    : boolean;
@@ -116,7 +130,8 @@ architecture beh of controller is
         encoded       : nsl_amba.axi4_stream.buffer_t;
         last          : boolean;
         
-        timeout       : natural; -- TODO: what should the limit be here?
+        timeout       : natural range 0 to 2**27-1; -- max possible value is 1000000 us ->
+                                                    -- at 100MHz it would be 100000000 cycles
     end record;
 
     signal r, rin : regs_t;
@@ -133,6 +148,7 @@ architecture beh of controller is
 
     signal clr_timeout_cnt_s : std_ulogic := '0';
     
+    -- synthesis translate_off
     constant c_print_logs : boolean := false;
 
     function to_fixed(s : string; len : natural) return string is
@@ -190,6 +206,15 @@ architecture beh of controller is
         when ST_RSP_BREAK_PUT      => return "ST_RSP_BREAK_PUT";
         when ST_IO_FLUSH_GET       => return "ST_IO_FLUSH_GET";
         when ST_IO_FLUSH_PUT       => return "ST_IO_FLUSH_PUT";
+        when ST_ERROR_DRAIN        => return "ST_ERROR_DRAIN";
+        when ST_ADDR2_RUN          => return "ST_ADDR2_RUN";
+        when ST_ADDR2_DATA         => return "ST_ADDR2_DATA";
+        when ST_ADDR2_ACK          => return "ST_ADDR2_ACK";
+        when ST_RESTART            => return "ST_RESTART";
+        when ST_RESTART_WAIT       => return "ST_RESTART_WAIT";
+        when ST_ADDR_RD_RUN        => return "ST_ADDR_RD_RUN";
+        when ST_ADDR_RD_DATA       => return "ST_ADDR_RD_DATA";
+        when ST_ADDR_RD_ACK        => return "ST_ADDR_RD_ACK";
         when others                => return "UNKNOWN";
       end case;
     end;
@@ -199,7 +224,8 @@ architecture beh of controller is
         nsl_simulation.logging.log_info("In " & state_to_string(r.state) & " => " & state_to_string(rin.state) & LF );
       end if;
     end procedure;
-
+    -- synthesis translate_on
+    
 begin
 
     assert nsl_amba.axi4_stream.byte_count(axi_s_cfg_c, cmd_i) = 1
@@ -276,10 +302,12 @@ begin
         elsif r.timeout /= 0 then
           r.timeout <= r.timeout - 1;
         end if;
+        -- synthesis translate_off
         if rin.state = r.state then
         else
           log_state_change(r => r, rin => rin);
         end if;
+        -- synthesis translate_on
       end if;
       if reset_n_i = '0' then
         r.state <= ST_RESET;
@@ -291,6 +319,7 @@ begin
                           cmd_i, r, rsp_i,
                           shift_r_data_i, shift_r_valid_i, shift_w_ready_i,
                           shift_arb_ok_i)
+      variable data : std_ulogic_vector(7 downto 0);
     begin
       rin <= r;
       clr_timeout_cnt_s <= '0';
@@ -304,28 +333,27 @@ begin
       
       case r.state is
         when ST_RESET =>
-          nsl_simulation.logging.log_info("In ST_RESET");
           rin.state         <= ST_ARRAY_GET;
           rin.parser        <= nsl_data.cbor.reset;
           rin.word_count    <= 0;
           rin.word_total    <= 0;
           rin.command_count <= 0;
-          rin.addr          <= (others => '-'); -- TODO: '0' or '-'?
+          rin.addr          <= (others => '0');
+          rin.rw            <= '0';
           rin.data          <= (others => '-');
           rin.last          <= false;
           rin.encoded       <= nsl_amba.axi4_stream.reset(buffer_cfg_c);
           rin.cmd_cancelled <= false;
           rin.timeout       <= 0;
-          clr_timeout_cnt_s <= '0';
 
         when ST_ARRAY_GET =>
-            if cmd_i.valid = '1' then
-              nsl_simulation.logging.log_info("In ST_ARRAY_GET, parsing a byte");
-              rin.parser <= nsl_data.cbor.feed(r.parser, cmd_i.data(0));
-              if nsl_data.cbor.is_last( r.parser, cmd_i.data(0) ) then
-                rin.state <= ST_ARRAY_ENTER;
-              end if;
+          if nsl_amba.axi4_stream.is_valid(axi_s_cfg_c, cmd_i) then
+            data := nsl_data.bytestream.first_left(nsl_amba.axi4_stream.bytes(axi_s_cfg_c, cmd_i));
+            rin.parser <= nsl_data.cbor.feed(r.parser, data);
+            if nsl_data.cbor.is_last(r.parser, data) then
+              rin.state <= ST_ARRAY_ENTER;
             end if;
+          end if;
 
         when ST_ARRAY_ENTER =>
           if nsl_data.cbor.kind(r.parser) = KIND_ARRAY then
@@ -334,22 +362,24 @@ begin
               rin.indefinite    <= false;
             else
               rin.indefinite    <= true;
+              nsl_simulation.logging.log_warning("Indefinite-length array encountered!");
             end if;
             rin.parser <= nsl_data.cbor.reset;
             rin.state  <= ST_RSP_ARRAY_HDR_PREP;
           else 
-            -- TODO ??
+            nsl_simulation.logging.log_warning("Expected CBOR array, draining frame");
+            rin.last  <= true;
+            rin.state <= ST_ERROR_DRAIN;
           end if;
 
         when ST_CMD_GET =>
-            if cmd_i.valid = '1' then
-              nsl_simulation.logging.log_info("In ST_CMD_GET, parsing a byte");
-              rin.parser <= nsl_data.cbor.feed(r.parser, cmd_i.data(0));
-              if nsl_data.cbor.is_last( r.parser, cmd_i.data(0) ) then
-                rin.cmd_cancelled <= false;
-                rin.state <= ST_CMD_EXEC;
-              end if;
+          if cmd_i.valid = '1' then
+            rin.parser <= nsl_data.cbor.feed(r.parser, cmd_i.data(0));
+            if nsl_data.cbor.is_last( r.parser, cmd_i.data(0) ) then
+              rin.cmd_cancelled <= false;
+              rin.state <= ST_CMD_EXEC;
             end if;
+          end if;
 
         when ST_CMD_EXEC =>
           if nsl_data.cbor.kind(r.parser) = KIND_ARRAY then
@@ -364,18 +394,20 @@ begin
           elsif nsl_data.cbor.kind(r.parser) = KIND_TAG and nsl_data.cbor.arg_int(r.parser) = 1 then
             rin.state <= ST_POLL_ARRAY_GET;
           else
-            rin.state <= ST_RSP_BREAK_PREP;
+            nsl_simulation.logging.log_warning("Unknown command, draining frame");
+            rin.last  <= true;
+            rin.state <= ST_ERROR_DRAIN;
           end if;
           rin.parser <= nsl_data.cbor.reset;
           if not r.indefinite then
-            rin.command_count <= (r.command_count - 1) mod 32;
+            rin.command_count <= r.command_count - 1;
           end if;
 
         when ST_ADDR_GET =>
             if cmd_i.valid = '1' then
-              nsl_simulation.logging.log_info("In ST_ADDR_GET, parsing a byte");
-              rin.parser <= nsl_data.cbor.feed(r.parser, cmd_i.data(0));
-              if nsl_data.cbor.is_last( r.parser, cmd_i.data(0) ) then
+              data := nsl_data.bytestream.first_left(nsl_amba.axi4_stream.bytes(axi_s_cfg_c, cmd_i));
+              rin.parser <= nsl_data.cbor.feed(r.parser, data);
+              if nsl_data.cbor.is_last(r.parser, data) then
                 rin.state <= ST_ADDR_SET;
               end if;
             end if;
@@ -385,14 +417,18 @@ begin
             rin.addr <= std_ulogic_vector(nsl_data.cbor.arg(r.parser, 10));
             rin.parser <= nsl_data.cbor.reset;
             rin.state  <= ST_OP_GET;
+            -- nsl_simulation.logging.log_info("Address is set to " & nsl_data.text.to_string(rin.addr));
           else
-            -- TODO : think about what to do it the parsed data is not correct!?
+            nsl_simulation.logging.log_warning("Wrong data type for address, draining frame");
+            rin.last  <= true;
+            rin.state <= ST_ERROR_DRAIN;
           end if;
 
         when ST_OP_GET =>
             if cmd_i.valid = '1' then
-              rin.parser <= nsl_data.cbor.feed(r.parser, cmd_i.data(0));
-              if nsl_data.cbor.is_last( r.parser, cmd_i.data(0) ) then
+              data := nsl_data.bytestream.first_left(nsl_amba.axi4_stream.bytes(axi_s_cfg_c, cmd_i));
+              rin.parser <= nsl_data.cbor.feed(r.parser, data);
+              if nsl_data.cbor.is_last(r.parser, data) then
                 rin.state <= ST_ADDR_SET_W_R;
               end if;
             end if;
@@ -401,16 +437,18 @@ begin
           rin.state <= ST_START;
           if nsl_data.cbor.kind(r.parser) = KIND_POSITIVE then
             -- READ OPERATION
-            rin.addr <= r.addr(8 downto 0) & '1';
+            rin.rw <= '1';
             rin.word_count <= nsl_data.cbor.arg_int(r.parser);
             rin.word_total <= nsl_data.cbor.arg_int(r.parser);
           elsif nsl_data.cbor.kind(r.parser) = KIND_BSTR then
             -- WRITE OPERATION
-            rin.addr <= r.addr(8 downto 0) & '0';
+            rin.rw <= '0';
             rin.word_count <= nsl_data.cbor.arg_int(r.parser);
             rin.word_total <= nsl_data.cbor.arg_int(r.parser);
           else
-            -- TODO : think about what to do it the parsed data is not correct!?
+            nsl_simulation.logging.log_warning("Wrong data type for read or write operation, draining frame");
+            rin.last  <= true;
+            rin.state <= ST_ERROR_DRAIN;
           end if;
 
         when ST_START =>
@@ -430,7 +468,13 @@ begin
         when ST_ADDR_RUN =>
           if clocker_ready_i = '1' then
             rin.state <= ST_ADDR_DATA;
-            rin.data  <= r.addr(7 downto 0);
+            if r.addr(9 downto 7) /= "000" then
+              -- 10-bit mode: send header with R/W=0 (write direction for address phase)
+              rin.data <= "11110" & r.addr(9 downto 8) & '0';
+            else
+              -- 7-bit mode: send {A6..A0, R/W}
+              rin.data <= r.addr(6 downto 0) & r.rw;
+            end if;
           end if;
 
         when ST_ADDR_DATA =>
@@ -442,13 +486,15 @@ begin
           if shift_r_valid_i = '1' then
             rin.data <= (0 => not shift_r_data_i(0), others => '0');
             if shift_r_data_i(0) = '0' then -- ACK OK
-              if r.addr(0) = '1' then
+              if r.addr(9 downto 7) /= "000" then
+                -- 10-bit address: need to send second address byte
+                rin.state <= ST_ADDR2_RUN;
+              elsif r.rw = '1' then
+                -- 7-bit READ
                 clr_timeout_cnt_s <= '1';
-                rin.state <= ST_RSP_BSTR_HDR_PREP;  -- before going to
-                                                    -- ST_READ_RUN, write the
-                                                    -- bstr header to hold the
-                                                    -- read bytes
+                rin.state <= ST_RSP_BSTR_HDR_PREP;
               else
+                -- 7-bit WRITE
                 rin.state <= ST_WRITE_GET;
               end if;
             else -- NACK
@@ -496,9 +542,10 @@ begin
             if not r.cmd_cancelled then
               rin.state <= ST_WRITE_RUN;
             else
+              -- nsl_simulation.logging.log_info("[Cancelled command] In ST_WRITE_GET, r.word_count is " & nsl_data.text.to_string(r.word_count));
               rin.word_count <= r.word_count - 1;
               rin.state <= ST_WRITE_END;
-              nsl_simulation.logging.log_info("[Cancelled command] In ST_WRITE_GET, discarding a byte and going to ST_WRITE_END");
+              -- nsl_simulation.logging.log_info("[Cancelled command] In ST_WRITE_GET, discarding a byte and going to ST_WRITE_END");
             end if;
           end if;
 
@@ -531,7 +578,7 @@ begin
               if not r.cmd_cancelled then
                 rin.state <= ST_RSP_OK_PREP;
               else
-                nsl_simulation.logging.log_info("[Cancelled command] In ST_WRITE_END, going to ST_CMD_END (NOT via ST_RSP_OK_PREP)");
+                -- nsl_simulation.logging.log_info("[Cancelled command] In ST_WRITE_END, going to ST_CMD_END (NOT via ST_RSP_OK_PREP)");
                 rin.state <= ST_CMD_END;
               end if;
             else
@@ -554,12 +601,12 @@ begin
         when ST_TIMEOUT_GET =>
           if not nsl_data.cbor.is_done(r.parser) then
             if cmd_i.valid = '1' then
-              rin.parser <= nsl_data.cbor.feed(r.parser, cmd_i.data(0));
+              rin.parser <= nsl_data.cbor.feed(r.parser, nsl_data.bytestream.first_left(nsl_amba.axi4_stream.bytes(axi_s_cfg_c, cmd_i)));
             end if;
           else
             rin.timeout  <= integer( nsl_data.cbor.arg_int(r.parser) * clock_cycles_per_us_c );
-            nsl_simulation.logging.log_info("arg is " & nsl_data.text.to_string(nsl_data.cbor.arg_int(r.parser)) );
-            nsl_simulation.logging.log_info("Setting r.timeout to " & nsl_data.text.to_string(integer( nsl_data.cbor.arg_int(r.parser) * clock_i_hz_c / 1000000)));
+            -- nsl_simulation.logging.log_info("arg is " & nsl_data.text.to_string(nsl_data.cbor.arg_int(r.parser)) );
+            -- nsl_simulation.logging.log_info("Setting r.timeout to " & nsl_data.text.to_string(integer( nsl_data.cbor.arg_int(r.parser) * clock_i_hz_c / 1000000)));
             rin.parser   <= nsl_data.cbor.reset;
             rin.state    <= ST_ADDR_GET;
           end if;
@@ -591,7 +638,7 @@ begin
             rin.state <= ST_STOP_WAIT;
           end if;
 
-        when ST_STOP_WAIT => -- TODO probably I can remove it
+        when ST_STOP_WAIT =>
         if clocker_ready_i = '1' then
           if r.timeout = 0 then
             rin.state <= ST_CMD_END;
@@ -617,11 +664,11 @@ begin
         
         when ST_RSP_ANACK_PUT =>
           if rsp_i.ready = '1' then
-            if r.addr(0) = '1' then
+            if r.rw = '1' then
               rin.state <= ST_CMD_END;
             else
               -- In the case of write operations, must read all the bytes to
-              -- read, even if they will not be written.
+              -- write, even if they will not be written.
               rin.state <= ST_WRITE_GET;
             end if;
           end if;
@@ -677,7 +724,92 @@ begin
             rin.state <= ST_ARRAY_GET;
           end if;
 
-          
+      when ST_ERROR_DRAIN =>
+          if nsl_amba.axi4_stream.is_valid(axi_s_cfg_c, cmd_i) then
+            if nsl_amba.axi4_stream.is_last(axi_s_cfg_c, cmd_i) then
+              if r.last then
+                rin.state <= ST_RESET;
+              else
+                rin.state <= ST_RSP_BREAK_PREP;
+              end if;
+            end if;
+          end if;
+
+      -- 10-bit addressing: second address byte
+      when ST_ADDR2_RUN =>
+        if clocker_ready_i = '1' then
+          rin.state <= ST_ADDR2_DATA;
+          rin.data <= r.addr(7 downto 0);  -- A7..A0
+        end if;
+
+      when ST_ADDR2_DATA =>
+        if shift_w_ready_i = '1' then
+          rin.state <= ST_ADDR2_ACK;
+        end if;
+
+      when ST_ADDR2_ACK =>
+        if shift_r_valid_i = '1' then
+          if shift_r_data_i(0) = '0' then -- ACK OK
+            if r.rw = '1' then
+              -- 10-bit READ: need repeated START then header with R/W=1
+              rin.state <= ST_RESTART;
+            else
+              -- 10-bit WRITE: continue with data
+              rin.state <= ST_WRITE_GET;
+            end if;
+          else -- NACK
+            if r.timeout = 0 then
+              rin.cmd_cancelled <= true;
+              rin.state <= ST_RSP_ANACK_PREP;
+            else
+              rin.state <= ST_STOP;
+            end if;
+          end if;
+        end if;
+
+      -- 10-bit read: repeated START and read-direction address
+      when ST_RESTART =>
+        if clocker_ready_i = '1' then
+          rin.state <= ST_RESTART_WAIT;
+        end if;
+
+      when ST_RESTART_WAIT =>
+        if clocker_ready_i = '1' then
+          if clocker_owned_i = '1' then
+            rin.state <= ST_ADDR_RD_RUN;
+          else
+            -- Lost arbitration during repeated START
+            rin.state <= ST_IO_FLUSH_GET;
+          end if;
+        end if;
+
+      when ST_ADDR_RD_RUN =>
+        if clocker_ready_i = '1' then
+          rin.state <= ST_ADDR_RD_DATA;
+          -- 10-bit header with R/W=1 (read direction)
+          rin.data <= "11110" & r.addr(9 downto 8) & '1';
+        end if;
+
+      when ST_ADDR_RD_DATA =>
+        if shift_w_ready_i = '1' then
+          rin.state <= ST_ADDR_RD_ACK;
+        end if;
+
+      when ST_ADDR_RD_ACK =>
+        if shift_r_valid_i = '1' then
+          if shift_r_data_i(0) = '0' then -- ACK OK
+            clr_timeout_cnt_s <= '1';
+            rin.state <= ST_RSP_BSTR_HDR_PREP;
+          else -- NACK
+            if r.timeout = 0 then
+              rin.cmd_cancelled <= true;
+              rin.state <= ST_RSP_ANACK_PREP;
+            else
+              rin.state <= ST_STOP;
+            end if;
+          end if;
+        end if;
+
       end case;
     end process;
 
@@ -685,14 +817,14 @@ begin
 
     moore: process (r)
     begin
-      cmd_o.ready <= '0';
+      cmd_o <= nsl_amba.axi4_stream.accept(axi_s_cfg_c, false);
       rsp_o <= nsl_amba.axi4_stream.transfer_defaults(cfg => axi_s_cfg_c);
 
-      shift_enable_o <= '0';
+      shift_enable_o    <= '0';
       shift_send_data_o <= '0';
-      shift_w_valid_o <= '0';
-      shift_r_ready_o <= '0';
-      shift_w_data_o <= (others => '-');
+      shift_w_valid_o   <= '0';
+      shift_r_ready_o   <= '0';
+      shift_w_data_o    <= (others => '-');
 
       if r.owned = '1' then
         clocker_cmd_o <= I2C_BUS_HOLD;
@@ -703,16 +835,16 @@ begin
       case r.state is
         when ST_RESET =>
 
-        when ST_ARRAY_GET | ST_CMD_GET | ST_ADDR_GET | ST_OP_GET  =>
-          cmd_o.ready <= '1';
+        when ST_ARRAY_GET | ST_CMD_GET | ST_ADDR_GET | ST_OP_GET | ST_ERROR_DRAIN  =>
+          cmd_o <= nsl_amba.axi4_stream.accept(axi_s_cfg_c, true);
 
         when ST_POLL_ARRAY_GET | ST_TIMEOUT_GET =>
           if not nsl_data.cbor.is_done(r.parser) then
-            cmd_o.ready <= '1';
+            cmd_o <= nsl_amba.axi4_stream.accept(axi_s_cfg_c, true);
           end if;
 
         when ST_WRITE_GET =>
-          cmd_o.ready <= '1';
+          cmd_o <= nsl_amba.axi4_stream.accept(axi_s_cfg_c, true);
 
        when ST_READ_PUT =>
           rsp_o <= nsl_amba.axi4_stream.transfer( cfg => axi_s_cfg_c, bytes => nsl_data.bytestream.from_suv(r.data) , last => r.last);
@@ -724,15 +856,19 @@ begin
         when ST_RSP_ANACK_PREP | ST_RSP_DNACK_PREP  =>
           clocker_cmd_o <= I2C_BUS_RELEASE;
           
-        when ST_ADDR_RUN | ST_WRITE_RUN | ST_READ_RUN =>
+        when ST_ADDR_RUN | ST_WRITE_RUN | ST_READ_RUN | ST_ADDR2_RUN | ST_ADDR_RD_RUN =>
           clocker_cmd_o <= I2C_BUS_RUN;
 
         when ST_ADDR_DATA =>
           shift_w_valid_o <= '1';
           shift_w_data_o <= r.data;
 
-        when ST_ADDR_ACK | ST_WRITE_ACK | ST_READ_DATA =>
+        when ST_ADDR_ACK | ST_WRITE_ACK | ST_READ_DATA | ST_ADDR2_ACK | ST_ADDR_RD_ACK =>
           shift_r_ready_o <= '1';
+
+        when ST_ADDR2_DATA | ST_ADDR_RD_DATA =>
+          shift_w_valid_o <= '1';
+          shift_w_data_o <= r.data;
 
         when ST_WRITE_DATA =>
           shift_w_valid_o <= '1';
@@ -746,10 +882,10 @@ begin
             shift_w_data_o <= (0 => '1', others => '-');
           end if;
                    
-        when ST_START_WAIT | ST_STOP_WAIT =>
+        when ST_START_WAIT | ST_STOP_WAIT | ST_RESTART_WAIT =>
           clocker_cmd_o <= I2C_BUS_HOLD;
 
-        when ST_START =>
+        when ST_START | ST_RESTART =>
           clocker_cmd_o <= I2C_BUS_START;
 
         when ST_STOP =>
@@ -767,14 +903,16 @@ begin
 
     case r.state is
 
-      when ST_ADDR_RUN | ST_ADDR_DATA | ST_ADDR_ACK | ST_WRITE_RUN | ST_WRITE_DATA | ST_WRITE_ACK =>
+      when ST_ADDR_RUN | ST_ADDR_DATA | ST_ADDR_ACK | ST_WRITE_RUN | ST_WRITE_DATA | ST_WRITE_ACK
+         | ST_ADDR2_RUN | ST_ADDR2_DATA | ST_ADDR2_ACK
+         | ST_ADDR_RD_RUN | ST_ADDR_RD_DATA | ST_ADDR_RD_ACK =>
         shift_enable_o <= '1';
         shift_send_data_o <= '1';
 
       when ST_READ_RUN | ST_READ_DATA | ST_READ_ACK =>
         shift_enable_o <= '1';
-        shift_send_data_o <= '0';   
-        
+        shift_send_data_o <= '0';
+
       when others =>
         null;
     end case;
