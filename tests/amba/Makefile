@@ -15,6 +15,7 @@ tb += axi4_mm_types
 tb += axi4_stream_cdc
 tb += axi4_stream_fifo
 tb += axi4_stream_flusher
+tb += axi4_stream_meta
 tb += axi4_stream_narrower
 tb += axi4_stream_types
 tb += axi4_stream_widener
@@ -24,5 +25,6 @@ tb += axi4_stream_buffer_align
 tb += axi4_stream_buffer_short
 tb += axi4_stream_random_pkt_checker
 tb += axi4_stream_error_inserter
+tb += axi4_stream_router
 
 include ../subdir.mk

@@ -21,6 +21,7 @@ package ethernet is
   -- bytes.
 
   -- For mac48 literal, use nsl_data.bytestream.from_hex
+  --@-- convert python:str, serialize:'value', convert:nsl_inet.ethernet.to_mac48({})
   subtype mac48_t is byte_string(0 to 5);
   type mac48_vector is array(integer range <>) of mac48_t;
   constant ethernet_broadcast_addr_c : mac48_t := from_hex("ffffffffffff");
@@ -148,6 +149,8 @@ package ethernet is
       from_l1_i : in nsl_bnoc.committed.committed_req;
       from_l1_o : out nsl_bnoc.committed.committed_ack
       );
+  --@-- grouped name:l1, members:to_l1;from_l1
+  --@-- grouped name:l3, members:to_l3;from_l3
   end component;
 
   -- An ethernet router based on destination address to select output port.

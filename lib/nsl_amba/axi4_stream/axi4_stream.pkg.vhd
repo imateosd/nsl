@@ -63,6 +63,7 @@ package axi4_stream is
     last: boolean := false) return config_t;
 
   -- Master-driven interface
+  --@-- grouped group:bus_t
   type master_t is
   record
     id: id_t;
@@ -76,6 +77,7 @@ package axi4_stream is
   end record;
 
   -- Slave-driven interface
+  --@-- grouped group:bus_t
   type slave_t is
   record
     ready: std_ulogic;
@@ -84,7 +86,9 @@ package axi4_stream is
   -- Bus
   type bus_t is
   record
+    --@-- grouped direction:forward
     m: master_t;
+    --@-- grouped direction:reverse
     s: slave_t;
   end record;
 
@@ -185,7 +189,7 @@ package axi4_stream is
       in_i : in master_t;
       in_o : out slave_t;
 
-      max_packet_length_m1_i : unsigned(max_packet_length_size_l2_c-1 downto 0) := (others => '1');
+      max_packet_length_m1_i : in unsigned(max_packet_length_size_l2_c-1 downto 0) := (others => '1');
 
       out_o : out master_t;
       out_i : in slave_t
@@ -261,6 +265,7 @@ package axi4_stream is
       out_o : out master_t;
       out_i : in slave_t
       );
+    --@-- grouped name:in_, members:in_i;in_o
   end component;
 
   -- This extracts a header of fixed size from the stream. Header is
@@ -1443,7 +1448,7 @@ package body axi4_stream is
     variable beat: master_t;
     variable d: byte_string(0 to cfg.data_width-1);
     variable s, k: std_ulogic_vector(0 to cfg.data_width-1);
-    variable first: boolean := false;
+    variable first: boolean := true;
   begin
     assert cfg.has_last
       report "Packet_receive with a byte stream cannot support unframed interface"
@@ -1473,9 +1478,9 @@ package body axi4_stream is
       if first then
         first := false;
 
-        id := work.axi4_stream.id(cfg, beat)(0 to id'length-1);
-        user := work.axi4_stream.user(cfg, beat)(0 to user'length-1);
-        dest := work.axi4_stream.dest(cfg, beat)(0 to dest'length-1);
+        id := work.axi4_stream.id(cfg, beat);
+        user := work.axi4_stream.user(cfg, beat);
+        dest := work.axi4_stream.dest(cfg, beat);
       end if;
 
       if is_last(cfg, beat) then
@@ -1499,7 +1504,7 @@ package body axi4_stream is
     variable beat: master_t;
     variable d: byte_string(0 to cfg.data_width-1);
     variable s, k: std_ulogic_vector(0 to cfg.data_width-1);
-    variable first: boolean := false;
+    variable first: boolean := true;
     variable should_be_last: boolean;
     variable offset: integer := 0;
   begin
@@ -1535,9 +1540,9 @@ package body axi4_stream is
       if first then
         first := false;
 
-        id := work.axi4_stream.id(cfg, beat)(0 to id'length-1);
-        user := work.axi4_stream.user(cfg, beat)(0 to user'length-1);
-        dest := work.axi4_stream.dest(cfg, beat)(0 to dest'length-1);
+        id := work.axi4_stream.id(cfg, beat);
+        user := work.axi4_stream.user(cfg, beat);
+        dest := work.axi4_stream.dest(cfg, beat);
       end if;
 
       if cfg.has_last then

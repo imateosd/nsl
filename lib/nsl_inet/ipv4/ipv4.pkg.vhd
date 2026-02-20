@@ -15,6 +15,7 @@ use work.checksum.all;
 package ipv4 is
 
   -- IPv4 address, in network order
+  --@-- convert python:str, serialize:'value', convert:nsl_inet.ipv4.to_ipv4({})
   subtype ipv4_t is byte_string(0 to 3);
 
   subtype ipv4_nibble_t is integer range 0 to 255;
@@ -207,6 +208,8 @@ package ipv4 is
       from_l2_i : in committed_req;
       from_l2_o : out committed_ack
       );
+  --@-- grouped name:l2, members:to_l2;from_l2
+  --@-- grouped name:l4, members:to_l4;from_l4
   end component;
 
   -- IP Header

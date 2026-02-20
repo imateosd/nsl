@@ -13,19 +13,35 @@ package framed is
 
   subtype framed_data_t is std_ulogic_vector(7 downto 0);
 
-  type framed_req_t is record
+  --@-- grouped group:framed_bus_t
+  type framed_req_t is
+  record
     data : framed_data_t;
     last : std_ulogic;
     valid  : std_ulogic;
   end record;
 
-  type framed_ack_t is record
+  --@-- grouped group:framed_bus_t
+  type framed_ack_t is
+  record
     ready  : std_ulogic;
   end record;
 
-  type framed_bus_t is record
+  --@-- grouped group:framed_io
+  type framed_bus_t is
+  record
+    --@-- grouped direction:forward
     req: framed_req_t;
+    --@-- grouped direction:reverse
     ack: framed_ack_t;
+  end record;
+
+  type framed_io is
+  record
+    --@-- grouped direction:forward
+    cmd: framed_bus_t;
+    --@-- grouped direction:reverse
+    rsp: framed_bus_t;
   end record;
 
   subtype framed_req is framed_req_t;
@@ -69,6 +85,11 @@ package framed is
       p_out_val   : out framed_req_t;
       p_out_ack   : in framed_ack_t
       );
+    --@-- grouped name:in, members:p_in_val;p_in_ack
+    --@-- grouped name:out, members:p_out_val;p_out_ack
+    --@-- clocking reset:p_resetn, port:p_clk(0)
+    --@-- clocking clock:p_clk(0), port:in
+    --@-- clocking clock:p_clk(clock_count-1), port:out
   end component;
 
   -- A fifo slice (i.e. a 2-deep fifo)
@@ -172,6 +193,12 @@ package framed is
       p_target_rsp_val   : in framed_req_t;
       p_target_rsp_ack   : out framed_ack_t
       );
+    --@-- grouped name:p_cmd, members:p_cmd_val;p_cmd_ack
+    --@-- grouped name:p_rsp, members:p_rsp_val;p_rsp_ack
+    --@-- grouped name:p_target_cmd, members:p_target_cmd_val;p_target_cmd_ack
+    --@-- grouped name:p_target_rsp, members:p_target_rsp_val;p_target_rsp_ack
+    --@-- grouped name:target, members:p_target_cmd;p_target_rsp
+    --@-- grouped name:source, members:p_cmd;p_rsp
   end component;
 
   -- Funnel takes multiple framed sources and merges them in a
@@ -259,16 +286,17 @@ package framed is
   -- Flush lags one cycle after matching data cycle,
   -- whatever the data flowing through during this later cycle.
   --
-  -- This creates three frames containing data [0, 1, 2] on the output:
-  --            _   _   _   _   _   _   _   _   _   _   _   _   _   _
-  -- clock_i \_/ \_/ \_/ \_/ \_/ \_/ \_/ \_/ \_/ \_/ \_/ \_/ \_/ \_/ \
-  --         _______________________________________________
-  -- ready                                                  \_________
-  --             ___________         _______________________     _____
-  -- valid   ___/           \_______/                       \___/
-  -- data    ---X 0 X 1 X 2 X-------X 0 X 1 X 2 X 0 X 1 X 2 X---X 8 X
-  --                             ___             ___             ___
-  -- flush_i ___________________/   \___________/   \___________/   \_
+  -- This creates three frames containing data [0, 1, 2] on the
+  -- output::
+  --              _   _   _   _   _   _   _   _   _   _   _   _   _   _
+  --   clock_i \_/ \_/ \_/ \_/ \_/ \_/ \_/ \_/ \_/ \_/ \_/ \_/ \_/ \_/ \
+  --           _______________________________________________
+  --   ready                                                  \_________
+  --               ___________         _______________________     _____
+  --   valid   ___/           \_______/                       \___/
+  --   data    ---X 0 X 1 X 2 X-------X 0 X 1 X 2 X 0 X 1 X 2 X---X 8 X
+  --                               ___             ___             ___
+  --   flush_i ___________________/   \___________/   \___________/   \_
   --
   component framed_committer is
     port(
@@ -325,11 +353,11 @@ package framed is
   --
   -- Routing decision is external to this module, using route_* ports.
   -- When forwarded, output frame has input header replaced with
-  -- passed header of out_header_count_c bytes.
+  -- passed header of ``out_header_count_c`` bytes.
   --
   -- If intention is to forward header as-is, parent should set
-  -- out_header_count_c = in_header_count_c and connect route_header_o
-  -- to route_header_i.
+  -- ``out_header_count_c`` = ``in_header_count_c`` and connect
+  -- ``route_header_o`` to ``route_header_i``.
   component framed_router is
     generic(
       in_count_c : natural;
@@ -347,14 +375,14 @@ package framed is
       out_o     : out framed_req_array(0 to out_count_c-1);
       out_i     : in framed_ack_array(0 to out_count_c-1);
 
-    route_valid_o       : out std_ulogic;
-    route_header_o      : out byte_string(0 to in_header_count_c-1);
-    route_source_o      : out natural range 0 to in_count_c-1;
+      route_valid_o       : out std_ulogic;
+      route_header_o      : out byte_string(0 to in_header_count_c-1);
+      route_source_o      : out natural range 0 to in_count_c-1;
 
-    route_ready_i       : in  std_ulogic := '1';
-    route_header_i      : in  byte_string(0 to out_header_count_c-1) := (others => x"00");
-    route_destination_i : in  natural range 0 to out_count_c-1;
-    route_drop_i        : in std_ulogic := '0'
+      route_ready_i       : in  std_ulogic := '1';
+      route_header_i      : in  byte_string(0 to out_header_count_c-1) := (others => x"00");
+      route_destination_i : in  natural range 0 to out_count_c-1;
+      route_drop_i        : in std_ulogic := '0'
       );
   end component;
 
